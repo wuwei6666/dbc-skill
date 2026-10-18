@@ -91,6 +91,15 @@ Global options include `--json` for machine-readable output and `--encoding` for
 - `init`: create a new, valid empty DBC database.
 - `summary`: report counts and database-level information.
 - `validate`: parse and validate without modifying the file.
+- `compare LEFT RIGHT`: compare two DBC databases without modifying either file.
+
+### Comparison
+
+The `compare` command identifies added, removed, modified, and unchanged nodes, messages, and signals. Nodes are matched by name, messages by `(frame_id, is_extended_frame)`, and signals by parent message identity plus signal name. A changed message ID therefore appears as one removed and one added message; renamed signals appear as removed and added signals.
+
+Compared fields include every supported read field: comments, message length/senders/CAN FD/cycle time, signal layout/conversion/range/unit/receivers/choices, and standard or extended multiplexer relationships. Added and removed entries contain full entity details. Modified entries contain field-level `left` and `right` values. The JSON result includes `equal`, per-entity change lists, and counts; text output displays the same changes in a readable form.
+
+A successful comparison returns zero whether the files are equal or different. Parse and operational failures return nonzero without modifying either input. Comparison has no backup because it is read-only.
 
 ### Entity commands
 
@@ -221,6 +230,8 @@ Use Python's standard `unittest` runner so the test suite needs no separate test
 - Backup creation, `--no-backup`, separate output files, and atomic-write failure behavior.
 - Save/reload preservation of supported metadata.
 - UTF-8 content and explicit encoding handling.
+- Comparison of equal files and added/removed/modified nodes, messages, signals, metadata, and multiplexer relationships in text and JSON.
+- Comparison is read-only and returns zero for both equal and different valid inputs.
 - Expected validation errors produce nonzero exits without tracebacks.
 
 ### End-to-end acceptance
@@ -233,9 +244,10 @@ From a clean virtual environment:
 4. Add nodes and messages.
 5. Add ordinary, standard-multiplexed, and extended-multiplexed signals.
 6. Query and update every entity type.
-7. Delete entities and verify relationship protections.
-8. Validate the final file and reload it with `cantools`.
-9. Verify English and Chinese documentation commands match the implemented CLI.
+7. Compare the original and edited files and verify field-level differences.
+8. Delete entities and verify relationship protections.
+9. Validate the final file and reload it with `cantools`.
+10. Verify English and Chinese documentation commands match the implemented CLI.
 
 All tests and the end-to-end workflow must pass before the final commit and push.
 

@@ -15,7 +15,7 @@
 - Support Python 3.9+ and pin `cantools==40.7.1` for the verified implementation.
 - Use `from __future__ import annotations` in Python modules that use modern annotation expressions.
 - Provide `list`, `show`, `add`, `update`, and `delete` for nodes, messages, and signals.
-- Support `init`, `summary`, and `validate` at file level.
+- Support `init`, `summary`, `validate`, and read-only structured `compare LEFT RIGHT` at file level.
 - Support standard `M`/`m<N>` multiplexing and extended `SG_MUL_VAL_` relationships supported by `cantools`.
 - Use structured CLI commands rather than direct DBC text edits.
 - Serialize and reload a temporary file before atomically replacing the destination.
@@ -405,7 +405,76 @@ git commit -m "feat: support extended DBC multiplexing"
 
 ---
 
-### Task 6: Agent Skill and Bilingual Documentation
+### Task 6: Structured DBC Comparison
+
+**Files:**
+- Create: `scripts/dbc_skill/compare.py`, `tests/test_compare.py`
+- Modify: `scripts/dbc_skill/cli.py`, `scripts/dbc_skill/formatting.py`
+
+**Interfaces:**
+- Consumes: strict read-only loading, entity serialization dictionaries, JSON/text output, and the expected-error boundary from Tasks 1–5.
+- Produces: `compare_databases(left: Database, right: Database) -> dict`.
+- Produces: `compare LEFT RIGHT`, returning `equal`, per-entity `added`, `removed`, `modified`, and `unchanged` collections, plus change counts.
+- Produces modified-field objects with stable `left` and `right` values; neither input is modified.
+
+- [ ] **Step 1: Write failing comparison tests**
+
+Build left and right databases in temporary files. Test identical files, one added/removed/modified node, message ID/type changes, message metadata changes, signal layout/conversion/choice/comment changes, and standard and extended multiplexer changes. Assert the core shape:
+
+```python
+result = compare_databases(left_db, right_db)
+self.assertFalse(result["equal"])
+self.assertEqual(result["messages"]["modified"][0]["changes"]["cycle_time"], {
+    "left": 100, "right": 200
+})
+self.assertEqual(result["signals"]["added"][0]["name"], "NewSignal")
+```
+
+Match nodes by name, messages by `(frame_id, is_extended_frame)`, and signals by parent message identity plus signal name. Verify changed message IDs appear as remove/add, while a message rename with unchanged ID is a modification. Test text and JSON CLI output, confirm successful comparisons return `0` for both equal and different files, and assert input bytes remain unchanged.
+
+- [ ] **Step 2: Run comparison tests and verify failure**
+
+Run:
+
+```bash
+.venv/bin/python -m unittest tests.test_compare -v
+```
+
+Expected: failures because the comparison engine and `compare` subcommand are absent.
+
+- [ ] **Step 3: Implement structured comparison**
+
+Reuse the service's entity-to-dictionary conversion so every supported read field is compared consistently. Produce full details for added/removed entities, field-level `left`/`right` changes for modified entities, and stable identifiers for unchanged entities. Sort output deterministically by entity type, message identity, and name. Treat floating-point values exactly as serialized by the existing dictionaries; do not introduce a new tolerance policy.
+
+Add CLI syntax:
+
+```text
+compare LEFT RIGHT
+```
+
+A valid comparison exits `0` whether `equal` is true or false. Parser and I/O failures use the existing nonzero traceback-free boundary. Do not accept mutation, output, backup, or no-backup options for this read-only command.
+
+- [ ] **Step 4: Run comparison and regression tests**
+
+Run:
+
+```bash
+.venv/bin/python -m unittest tests.test_compare tests.test_multiplexing tests.test_cli -v
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Expected: all tests pass, including multiplexer metadata differences and identical-file `equal: true` results.
+
+- [ ] **Step 5: Commit DBC comparison**
+
+```bash
+git add scripts tests
+git commit -m "feat: compare DBC databases"
+```
+
+---
+
+### Task 7: Agent Skill and Bilingual Documentation
 
 **Files:**
 - Create: `SKILL.md`, `README.zh-CN.md`, `LICENSE`
@@ -415,12 +484,12 @@ git commit -m "feat: support extended DBC multiplexing"
 - Create: `tests/test_docs.py`
 
 **Interfaces:**
-- Consumes: the implemented CLI syntax and JSON keys from Tasks 1–5.
+- Consumes: the implemented CLI syntax and JSON keys from Tasks 1–6.
 - Produces: an installable Skill whose commands can be copied and executed from the repository root.
 
 - [ ] **Step 1: Write failing documentation contract tests**
 
-Assert that `SKILL.md` has YAML frontmatter with `name: dbc-crud` and an English description containing DBC, CAN, CRUD, and multiplexing. Assert it includes Chinese trigger examples, structured-CLI instructions, backup warnings, and verification steps. Assert both README files link to each other and every documented entity operation appears in `references/cli-reference.md`.
+Assert that `SKILL.md` has YAML frontmatter with `name: dbc-crud` and an English description containing DBC, CAN, CRUD, comparison, and multiplexing. Assert it includes Chinese trigger examples, structured-CLI instructions, backup warnings, and verification steps. Assert both README files link to each other and every documented entity operation plus `compare LEFT RIGHT` appears in `references/cli-reference.md`.
 
 - [ ] **Step 2: Run documentation tests and verify failure**
 
@@ -434,9 +503,9 @@ Expected: failures because the Skill and bilingual documents are absent.
 
 - [ ] **Step 3: Write the Skill and complete documentation**
 
-Use `SKILL.md` to instruct agents to validate first, use `python3 scripts/dbc_crud.py`, prefer `--json`, avoid direct text edits, retain backups, and verify with `show` plus `validate`. Include English and Chinese prompts for adding nodes/messages/signals, editing scale, deleting safely, and creating standard or extended multiplexing.
+Use `SKILL.md` to instruct agents to validate first, use `python3 scripts/dbc_crud.py`, prefer `--json`, avoid direct text edits, retain backups, and verify with `show` plus `validate`. Include English and Chinese prompts for adding nodes/messages/signals, editing scale, deleting safely, comparing two DBC files, and creating standard or extended multiplexing.
 
-Document every command and field in `references/cli-reference.md` and `references/dbc-fields.md`. Explain DBC normalization, `.bak`, `--output`, `--no-backup`, encoding, standard versus extended frame IDs, and standard versus extended multiplexing. Provide complete English and Chinese workflows using only implemented commands. Add an MIT `LICENSE` and dependency/setup instructions.
+Document every command and field in `references/cli-reference.md` and `references/dbc-fields.md`. Explain comparison identity rules, field-level `left`/`right` changes, `equal`, and the zero exit code for valid equal or different inputs. Explain DBC normalization, `.bak`, `--output`, `--no-backup`, encoding, standard versus extended frame IDs, and standard versus extended multiplexing. Provide complete English and Chinese workflows using only implemented commands, including a comparison example. Add an MIT `LICENSE` and dependency/setup instructions.
 
 - [ ] **Step 4: Execute documentation examples and run the full suite**
 
@@ -460,7 +529,7 @@ git commit -m "docs: add bilingual DBC CRUD skill"
 
 ---
 
-### Task 7: End-to-End Acceptance, Review, and GitHub Delivery
+### Task 8: End-to-End Acceptance, Review, and GitHub Delivery
 
 **Files:**
 - Verify all repository files; modify only files needed to correct discovered defects.
@@ -484,7 +553,7 @@ Expected: dependency installation succeeds and every test passes from the clean 
 
 - [ ] **Step 2: Exercise the real CLI end to end**
 
-In a temporary directory, run `init`; add two nodes; add a message; add an ordinary signal; add a root selector, a standard branch, a nested selector with multiple values, and a nested leaf; run `list` and `show` for every entity type; update every entity type; attempt protected deletes; delete unreferenced entities; and run `validate`. Reload the result with:
+In a temporary directory, run `init`; add two nodes; add a message; add an ordinary signal; add a root selector, a standard branch, a nested selector with multiple values, and a nested leaf; run `list` and `show` for every entity type; update every entity type; compare the original backup with the edited file and verify field-level differences; attempt protected deletes; delete unreferenced entities; and run `validate`. Reload the result with:
 
 ```python
 import cantools
