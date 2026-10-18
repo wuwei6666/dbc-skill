@@ -14,7 +14,7 @@ from .errors import DBCError
 def load_database(path: Path, encoding: str) -> Database:
     try:
         return cantools.database.load_file(str(path), encoding=encoding, strict=True)
-    except (OSError, KeyError, ValueError, cantools.database.errors.Error) as exc:
+    except (OSError, LookupError, ValueError, cantools.database.errors.Error) as exc:
         raise DBCError(f"Unable to load DBC '{path}': {exc}") from exc
 
 
@@ -48,7 +48,7 @@ def save_database(
         finally:
             if temporary.exists():
                 temporary.unlink()
-    except (OSError, KeyError, ValueError, cantools.database.errors.Error) as exc:
+    except (OSError, LookupError, ValueError, cantools.database.errors.Error) as exc:
         raise DBCError(f"Unable to save DBC '{output or source}': {exc}") from exc
 
     return {

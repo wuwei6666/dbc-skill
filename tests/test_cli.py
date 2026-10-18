@@ -38,6 +38,25 @@ class FileCommandTests(unittest.TestCase):
             self.assertNotIn("Traceback", out)
             self.assertNotIn("Traceback", err)
 
+    def test_unknown_encoding_returns_json_error_without_traceback(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "valid.dbc"
+            source.write_bytes(cantools.database.Database().as_dbc_string().encode())
+
+            for command, path in (("init", root / "new.dbc"), ("validate", source)):
+                with self.subTest(command=command):
+                    code, out, err = run_cli(
+                        ["--json", "--encoding", "no-such-codec", command, str(path)]
+                    )
+
+                    self.assertEqual(code, 1)
+                    payload = json.loads(out)
+                    self.assertFalse(payload["success"])
+                    self.assertIn("error", payload)
+                    self.assertNotIn("Traceback", out)
+                    self.assertNotIn("Traceback", err)
+
 
 class StorageTests(unittest.TestCase):
     def test_replace_failure_preserves_original_bytes(self):

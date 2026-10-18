@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                 ) from exc
         else:
             raise DBCError(f"Unknown command: {args.command}")
-    except (DBCError, OSError, KeyError, cantools.database.errors.Error) as exc:
+    except (DBCError, OSError, LookupError, cantools.database.errors.Error) as exc:
         emit_error(args.command, str(exc), args.json_output)
         return 1
 
