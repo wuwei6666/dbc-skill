@@ -301,5 +301,352 @@ class NodeCommandTests(unittest.TestCase):
             self.assertFalse(Path(str(source) + ".bak").exists())
 
 
+class MessageCommandTests(unittest.TestCase):
+    def initialize(self, path):
+        code, out, err = run_cli(["--json", "init", str(path)])
+        self.assertEqual(code, 0, err)
+        for node in ("ECU_A", "ECU_B"):
+            code, out, err = run_cli(
+                ["--json", "node", "add", str(path), node, "--no-backup"]
+            )
+            self.assertEqual(code, 0, err)
+
+    def save_fixture(self, path, messages):
+        db = cantools.database.Database()
+        db.nodes.extend(
+            [
+                cantools.database.can.Node(name="ECU_A"),
+                cantools.database.can.Node(name="ECU_B"),
+            ]
+        )
+        db.messages.extend(messages)
+        save_database(db, path, None, "utf-8", backup=True)
+
+    def make_message(self, **overrides):
+        fields = {
+            "frame_id": 0x123,
+            "name": "Status",
+            "length": 8,
+            "signals": [],
+            "senders": ["ECU_A"],
+            "cycle_time": 100,
+            "comment": "Original",
+        }
+        fields.update(overrides)
+        return cantools.database.can.Message(**fields)
+
+    def test_message_add_list_filter_show_and_default_backup(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "messages.dbc"
+            self.initialize(source)
+            original = source.read_bytes()
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "add",
+                    str(source),
+                    "0x123",
+                    "Status",
+                    "--length",
+                    "8",
+                    "--sender",
+                    "ECU_A",
+                    "--cycle-time",
+                    "100",
+                    "--comment",
+                    "Status comment",
+                ]
+            )
+
+            self.assertEqual(code, 0, err)
+            expected = {
+                "frame_id": 0x123,
+                "name": "Status",
+                "length": 8,
+                "senders": ["ECU_A"],
+                "is_extended_frame": False,
+                "is_fd": False,
+                "cycle_time": 100,
+                "comment": "Status comment",
+                "signals": [],
+            }
+            self.assertEqual(
+                json.loads(out)["result"],
+                {
+                    **expected,
+                    "output": str(source),
+                    "backup": str(source) + ".bak",
+                },
+            )
+            self.assertEqual(Path(str(source) + ".bak").read_bytes(), original)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "add",
+                    str(source),
+                    "256",
+                    "Heartbeat",
+                    "--length",
+                    "1",
+                    "--sender",
+                    "ECU_B",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+
+            code, out, err = run_cli(
+                ["--json", "message", "list", str(source), "--sender", "ECU_A"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"], {"messages": [expected]})
+
+            code, out, err = run_cli(
+                ["--json", "message", "list", str(source), "--name", "Heartbeat"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(
+                [item["name"] for item in json.loads(out)["result"]["messages"]],
+                ["Heartbeat"],
+            )
+
+            code, out, err = run_cli(
+                ["--json", "message", "show", str(source), "291"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"], expected)
+
+            code, out, err = run_cli(["message", "list", str(source)])
+            self.assertEqual(code, 0, err)
+            self.assertIn("Status", out)
+            self.assertNotIn("Traceback", err)
+
+    def test_message_update_all_fields_and_clear_options(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "messages.dbc"
+            self.save_fixture(source, [self.make_message()])
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "update",
+                    str(source),
+                    "0x123",
+                    "--new-id",
+                    "0x456",
+                    "--new-name",
+                    "Renamed",
+                    "--length",
+                    "64",
+                    "--sender",
+                    "ECU_B",
+                    "--sender",
+                    "ECU_A",
+                    "--extended",
+                    "--fd",
+                    "--cycle-time",
+                    "250",
+                    "--comment",
+                    "Updated",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertEqual(result["frame_id"], 0x456)
+            self.assertEqual(result["name"], "Renamed")
+            self.assertEqual(result["length"], 64)
+            self.assertEqual(result["senders"], ["ECU_B", "ECU_A"])
+            self.assertTrue(result["is_extended_frame"])
+            self.assertTrue(result["is_fd"])
+            self.assertEqual(result["cycle_time"], 250)
+            self.assertEqual(result["comment"], "Updated")
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "update",
+                    str(source),
+                    "Renamed",
+                    "--standard",
+                    "--classic",
+                    "--length",
+                    "8",
+                    "--clear-cycle-time",
+                    "--clear-comment",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertFalse(result["is_extended_frame"])
+            self.assertFalse(result["is_fd"])
+            self.assertEqual(result["length"], 8)
+            self.assertIsNone(result["cycle_time"])
+            self.assertIsNone(result["comment"])
+            self.assertEqual(result["senders"], ["ECU_B", "ECU_A"])
+
+            reloaded = load_database(source, "utf-8").messages[0]
+            self.assertEqual(reloaded.frame_id, 0x456)
+            self.assertEqual(reloaded.name, "Renamed")
+            self.assertEqual(reloaded.senders, ["ECU_B", "ECU_A"])
+            self.assertIsNone(reloaded.cycle_time)
+            self.assertIsNone(reloaded.comment)
+
+    def test_message_delete_to_separate_output_reports_signal_count(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "source.dbc"
+            output = Path(temporary_directory) / "deleted.dbc"
+            self.save_fixture(
+                source,
+                [
+                    self.make_message(
+                        length=2,
+                        signals=[
+                            cantools.database.can.Signal(
+                                name="First", start=0, length=8
+                            ),
+                            cantools.database.can.Signal(
+                                name="Second", start=8, length=8
+                            ),
+                        ],
+                    )
+                ],
+            )
+            original = source.read_bytes()
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "delete",
+                    str(source),
+                    "0x123",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertEqual(result["name"], "Status")
+            self.assertEqual(result["deleted_signal_count"], 2)
+            self.assertEqual(result["output"], str(output))
+            self.assertIsNone(result["backup"])
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(load_database(output, "utf-8").messages, [])
+
+    def test_message_expected_errors_are_traceback_free_and_preserve_source(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "messages.dbc"
+            self.save_fixture(
+                source,
+                [
+                    self.make_message(),
+                    self.make_message(
+                        frame_id=0x124,
+                        name="Other",
+                        senders=[],
+                        cycle_time=None,
+                        comment=None,
+                    ),
+                ],
+            )
+            original = source.read_bytes()
+            commands = (
+                ["message", "add", str(source), "0x123", "Duplicate", "--length", "8"],
+                ["message", "add", str(source), "0x125", "Status", "--length", "8"],
+                ["message", "add", str(source), "0x800", "BadId", "--length", "8"],
+                [
+                    "message",
+                    "add",
+                    str(source),
+                    "0x126",
+                    "BadClassicLength",
+                    "--length",
+                    "9",
+                ],
+                [
+                    "message",
+                    "add",
+                    str(source),
+                    "0x126",
+                    "BadFdLength",
+                    "--length",
+                    "65",
+                    "--fd",
+                ],
+                [
+                    "message",
+                    "add",
+                    str(source),
+                    "0x126",
+                    "BadSender",
+                    "--length",
+                    "8",
+                    "--sender",
+                    "Missing",
+                ],
+                ["message", "update", str(source), "Other", "--new-id", "0x123"],
+                ["message", "show", str(source), "Missing"],
+                ["message", "delete", str(source), "0x999"],
+            )
+
+            for command in commands:
+                with self.subTest(command=command):
+                    code, out, err = run_cli(["--json"] + command)
+                    self.assertEqual(code, 1)
+                    self.assertFalse(json.loads(out)["success"])
+                    self.assertIn("error", json.loads(out))
+                    self.assertNotIn("Traceback", out)
+                    self.assertNotIn("Traceback", err)
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_shrinking_dlc_below_signal_boundary_preserves_source_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "messages.dbc"
+            self.save_fixture(
+                source,
+                [
+                    self.make_message(
+                        length=3,
+                        signals=[
+                            cantools.database.can.Signal(
+                                name="Wide", start=8, length=16
+                            )
+                        ],
+                    )
+                ],
+            )
+            original = source.read_bytes()
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "update",
+                    str(source),
+                    "Status",
+                    "--length",
+                    "2",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertFalse(json.loads(out)["success"])
+            self.assertIn("error", json.loads(out))
+            self.assertNotIn("Traceback", out)
+            self.assertNotIn("Traceback", err)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertFalse(Path(str(source) + ".bak").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

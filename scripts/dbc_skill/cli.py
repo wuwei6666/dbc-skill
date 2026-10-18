@@ -8,7 +8,7 @@ from cantools.database.can import Database
 
 from .errors import DBCError
 from .formatting import emit_error, emit_result
-from .service import DBCService
+from .service import DBCService, parse_frame_id
 from .storage import load_database, save_database
 
 
@@ -68,6 +68,63 @@ def build_parser() -> argparse.ArgumentParser:
     node_delete_parser.add_argument("name")
     _add_mutation_arguments(node_delete_parser)
 
+    message_parser = subparsers.add_parser("message", help="Manage DBC messages.")
+    message_subparsers = message_parser.add_subparsers(
+        dest="message_command", required=True
+    )
+
+    message_list_parser = message_subparsers.add_parser("list", help="List messages.")
+    message_list_parser.add_argument("path", type=Path)
+    message_list_parser.add_argument("--name")
+    message_list_parser.add_argument("--sender")
+
+    message_show_parser = message_subparsers.add_parser("show", help="Show a message.")
+    message_show_parser.add_argument("path", type=Path)
+    message_show_parser.add_argument("reference")
+
+    message_add_parser = message_subparsers.add_parser("add", help="Add a message.")
+    message_add_parser.add_argument("path", type=Path)
+    message_add_parser.add_argument("frame_id")
+    message_add_parser.add_argument("name")
+    message_add_parser.add_argument("--length", type=int, required=True)
+    message_add_parser.add_argument("--sender", dest="senders", action="append")
+    message_add_parser.add_argument("--extended", action="store_true")
+    message_add_parser.add_argument("--fd", action="store_true")
+    message_add_parser.add_argument("--cycle-time", type=int)
+    message_add_parser.add_argument("--comment")
+    _add_mutation_arguments(message_add_parser)
+
+    message_update_parser = message_subparsers.add_parser(
+        "update", help="Update a message."
+    )
+    message_update_parser.add_argument("path", type=Path)
+    message_update_parser.add_argument("reference")
+    message_update_parser.add_argument("--new-id")
+    message_update_parser.add_argument("--new-name")
+    message_update_parser.add_argument("--length", type=int)
+    message_update_parser.add_argument("--sender", dest="senders", action="append")
+    frame_type_group = message_update_parser.add_mutually_exclusive_group()
+    frame_type_group.add_argument("--extended", dest="extended", action="store_true")
+    frame_type_group.add_argument("--standard", dest="extended", action="store_false")
+    fd_group = message_update_parser.add_mutually_exclusive_group()
+    fd_group.add_argument("--fd", dest="fd", action="store_true")
+    fd_group.add_argument("--classic", dest="fd", action="store_false")
+    cycle_time_group = message_update_parser.add_mutually_exclusive_group()
+    cycle_time_group.add_argument("--cycle-time", type=int)
+    cycle_time_group.add_argument("--clear-cycle-time", action="store_true")
+    message_comment_group = message_update_parser.add_mutually_exclusive_group()
+    message_comment_group.add_argument("--comment")
+    message_comment_group.add_argument("--clear-comment", action="store_true")
+    message_update_parser.set_defaults(extended=None, fd=None)
+    _add_mutation_arguments(message_update_parser)
+
+    message_delete_parser = message_subparsers.add_parser(
+        "delete", help="Delete a message."
+    )
+    message_delete_parser.add_argument("path", type=Path)
+    message_delete_parser.add_argument("reference")
+    _add_mutation_arguments(message_delete_parser)
+
     return parser
 
 
@@ -112,6 +169,62 @@ def main(argv: list[str] | None = None) -> int:
                     result = service.delete_node(args.name)
                 else:
                     raise DBCError(f"Unknown node command: {args.node_command}")
+                result.update(
+                    save_database(
+                        service.db,
+                        args.path,
+                        args.output,
+                        args.encoding,
+                        backup=not args.no_backup,
+                    )
+                )
+        elif args.command == "message":
+            service = DBCService(load_database(args.path, args.encoding))
+            if args.message_command == "list":
+                result = {"messages": service.list_messages(args.name, args.sender)}
+            elif args.message_command == "show":
+                result = service.show_message(args.reference)
+            else:
+                if args.message_command == "add":
+                    result = service.add_message(
+                        parse_frame_id(args.frame_id),
+                        args.name,
+                        args.length,
+                        args.senders or [],
+                        args.extended,
+                        args.fd,
+                        args.cycle_time,
+                        args.comment,
+                    )
+                elif args.message_command == "update":
+                    changes = {}
+                    if args.new_id is not None:
+                        changes["frame_id"] = parse_frame_id(args.new_id)
+                    if args.new_name is not None:
+                        changes["name"] = args.new_name
+                    if args.length is not None:
+                        changes["length"] = args.length
+                    if args.senders is not None:
+                        changes["senders"] = args.senders
+                    if args.extended is not None:
+                        changes["extended"] = args.extended
+                    if args.fd is not None:
+                        changes["fd"] = args.fd
+                    if args.clear_cycle_time:
+                        changes["cycle_time"] = None
+                    elif args.cycle_time is not None:
+                        changes["cycle_time"] = args.cycle_time
+                    if args.clear_comment:
+                        changes["comment"] = None
+                    elif args.comment is not None:
+                        changes["comment"] = args.comment
+                    result = service.update_message(args.reference, **changes)
+                elif args.message_command == "delete":
+                    result = service.delete_message(args.reference)
+                else:
+                    raise DBCError(
+                        f"Unknown message command: {args.message_command}"
+                    )
                 result.update(
                     save_database(
                         service.db,
