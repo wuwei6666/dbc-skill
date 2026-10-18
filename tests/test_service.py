@@ -469,5 +469,237 @@ class MessageServiceTests(unittest.TestCase):
             self.assertEqual(message["comment"], "状态 comment")
 
 
+class ValueParserTests(unittest.TestCase):
+    def test_integer_choice_and_multiplexer_value_parsers(self):
+        from scripts.dbc_skill import values
+
+        self.assertEqual(values.parse_integer(12), 12)
+        self.assertEqual(values.parse_integer("-12"), -12)
+        self.assertEqual(values.parse_integer("0x10"), 16)
+        self.assertEqual(values.parse_integer("+0X10"), 16)
+        self.assertEqual(
+            values.parse_choices(["0=Off", "0x1=On", "-1=Invalid=State"]),
+            {0: "Off", 1: "On", -1: "Invalid=State"},
+        )
+        self.assertEqual(
+            values.parse_multiplexer_values("0,2-4,0x7,3"),
+            [0, 2, 3, 4, 7],
+        )
+
+    def test_value_parsers_reject_malformed_values(self):
+        from scripts.dbc_skill import values
+
+        for value in ("", "xyz", "0x", "1.5", True, None):
+            with self.subTest(parser="integer", value=value):
+                with self.assertRaises(DBCError):
+                    values.parse_integer(value)
+        for choice_values in (
+            ["missing-separator"],
+            ["=MissingRaw"],
+            ["0="],
+            ["0=First", "0x0=Duplicate"],
+        ):
+            with self.subTest(parser="choices", values=choice_values):
+                with self.assertRaises(DBCError):
+                    values.parse_choices(choice_values)
+        for value in ("", "1,", "4-2", "-1", "0x2-xyz"):
+            with self.subTest(parser="multiplexer", value=value):
+                with self.assertRaises(DBCError):
+                    values.parse_multiplexer_values(value)
+
+
+class SignalServiceTests(unittest.TestCase):
+    def make_service(self):
+        service = DBCService(Database())
+        service.add_node("ECU_A", None)
+        service.add_node("ECU_B", None)
+        service.add_message(0x123, "Status", 8, ["ECU_A"], False, False, None, None)
+        return service
+
+    def test_add_list_show_and_round_trip_all_fields(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "signals.dbc"
+            service = self.make_service()
+            expected = {
+                "name": "Temperature",
+                "start": 7,
+                "length": 16,
+                "byte_order": "big_endian",
+                "is_signed": True,
+                "factor": 0.5,
+                "offset": -40,
+                "minimum": -40,
+                "maximum": 215,
+                "unit": "°C",
+                "receivers": ["ECU_A", "ECU_B"],
+                "choices": {0: "Off", 1: "On"},
+                "comment": "温度 comment",
+                "is_multiplexer": False,
+                "multiplexer_ids": None,
+                "multiplexer_signal": None,
+            }
+
+            result = service.add_signal(
+                "0x123",
+                "Temperature",
+                start=7,
+                length=16,
+                byte_order="big_endian",
+                is_signed=True,
+                factor=0.5,
+                offset=-40,
+                minimum=-40,
+                maximum=215,
+                unit="°C",
+                receivers=["ECU_A", "ECU_B"],
+                choices={0: "Off", 1: "On"},
+                comment="温度 comment",
+            )
+            self.assertEqual(result, expected)
+            service.add_signal("Status", "Second", start=16, length=8)
+
+            self.assertEqual(service.show_signal("291", "Temperature"), expected)
+            self.assertEqual(service.list_signals("Status", name="Temperature"), [expected])
+            self.assertEqual(
+                [signal["name"] for signal in service.list_signals("0x123")],
+                ["Temperature", "Second"],
+            )
+
+            save_database(service.db, source, None, "utf-8", backup=True)
+            reloaded = DBCService(load_database(source, "utf-8"))
+            self.assertEqual(reloaded.show_signal("Status", "Temperature"), expected)
+            updated = reloaded.update_signal(
+                "Status", "Temperature", comment="Updated after reload"
+            )
+            self.assertEqual(updated["choices"], {0: "Off", 1: "On"})
+            self.assertEqual(updated["comment"], "Updated after reload")
+
+    def test_partial_update_preserves_values_and_clears_nullable_fields(self):
+        service = self.make_service()
+        service.add_signal(
+            "Status",
+            "State",
+            start=0,
+            length=8,
+            factor=2,
+            offset=1,
+            minimum=0,
+            maximum=100,
+            unit="rpm",
+            receivers=["ECU_A"],
+            choices={0: "Off"},
+            comment="Original",
+        )
+
+        updated = service.update_signal(
+            "Status",
+            "State",
+            name="Renamed",
+            start=8,
+            length=16,
+            is_signed=True,
+            factor=0.25,
+            offset=-1,
+            receivers=["ECU_B"],
+            comment="Updated",
+        )
+        self.assertEqual(updated["name"], "Renamed")
+        self.assertEqual(updated["start"], 8)
+        self.assertEqual(updated["length"], 16)
+        self.assertEqual(updated["byte_order"], "little_endian")
+        self.assertTrue(updated["is_signed"])
+        self.assertEqual(updated["factor"], 0.25)
+        self.assertEqual(updated["offset"], -1)
+        self.assertEqual(updated["minimum"], 0)
+        self.assertEqual(updated["maximum"], 100)
+        self.assertEqual(updated["unit"], "rpm")
+        self.assertEqual(updated["receivers"], ["ECU_B"])
+        self.assertEqual(updated["choices"], {0: "Off"})
+        self.assertEqual(updated["comment"], "Updated")
+
+        cleared = service.update_signal(
+            "0x123",
+            "Renamed",
+            start=7,
+            byte_order="big_endian",
+            is_signed=False,
+            minimum=None,
+            maximum=None,
+            unit=None,
+            receivers=[],
+            choices=None,
+            comment=None,
+        )
+        self.assertEqual(cleared["byte_order"], "big_endian")
+        self.assertFalse(cleared["is_signed"])
+        self.assertIsNone(cleared["minimum"])
+        self.assertIsNone(cleared["maximum"])
+        self.assertIsNone(cleared["unit"])
+        self.assertEqual(cleared["receivers"], [])
+        self.assertIsNone(cleared["choices"])
+        self.assertIsNone(cleared["comment"])
+        self.assertEqual(cleared["factor"], 0.25)
+        self.assertEqual(cleared["offset"], -1)
+
+    def test_validation_duplicates_and_missing_references(self):
+        service = self.make_service()
+        service.add_signal("Status", "Existing", start=0, length=8)
+        invalid_fields = (
+            {"start": -1, "length": 8},
+            {"start": 0, "length": 0},
+            {"start": True, "length": 8},
+            {"start": 0, "length": 8, "byte_order": "middle_endian"},
+            {"start": 0, "length": 8, "minimum": 2, "maximum": 1},
+            {"start": 0, "length": 8, "receivers": ["Missing"]},
+            {"start": 0, "length": 8, "is_signed": 1},
+        )
+        for fields in invalid_fields:
+            with self.subTest(fields=fields):
+                with self.assertRaises(DBCError):
+                    service.add_signal("Status", "Invalid", **fields)
+                self.assertEqual(len(service.list_signals("Status")), 1)
+
+        with self.assertRaises(DBCError):
+            service.add_signal("Status", "Existing", start=8, length=8)
+        with self.assertRaises(DBCError):
+            service.add_signal("Missing", "Other", start=0, length=8)
+        with self.assertRaises(DBCError):
+            service.update_signal("Status", "Existing", unknown=True)
+
+        operations = (
+            ("show", lambda: service.show_signal("Status", "Missing")),
+            ("update", lambda: service.update_signal("Status", "Missing", start=1)),
+            ("delete", lambda: service.delete_signal("Status", "Missing")),
+        )
+        for operation, call in operations:
+            with self.subTest(operation=operation):
+                with self.assertRaises(DBCError):
+                    call()
+        self.assertEqual(service.show_signal("Status", "Existing")["start"], 0)
+
+    def test_overlap_failures_roll_back_and_delete_returns_detail(self):
+        service = self.make_service()
+        service.add_signal("Status", "First", start=0, length=8)
+        service.add_signal("Status", "Second", start=8, length=8)
+
+        with self.assertRaises(DBCError):
+            service.add_signal("Status", "Overlap", start=0, length=8)
+        with self.assertRaises(DBCError):
+            service.update_signal("Status", "Second", start=0)
+
+        self.assertEqual(
+            [signal["name"] for signal in service.list_signals("Status")],
+            ["First", "Second"],
+        )
+        self.assertEqual(service.show_signal("Status", "Second")["start"], 8)
+        deleted = service.delete_signal("0x123", "First")
+        self.assertEqual(deleted["name"], "First")
+        self.assertEqual(deleted["start"], 0)
+        self.assertEqual(
+            [signal["name"] for signal in service.list_signals("Status")],
+            ["Second"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

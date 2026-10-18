@@ -654,5 +654,471 @@ class MessageCommandTests(unittest.TestCase):
             self.assertFalse(Path(str(source) + ".bak").exists())
 
 
+class SignalCommandTests(unittest.TestCase):
+    def save_fixture(self, path, signals=None):
+        db = cantools.database.Database()
+        db.nodes.extend(
+            [
+                cantools.database.can.Node(name="ECU_A"),
+                cantools.database.can.Node(name="ECU_B"),
+            ]
+        )
+        db.messages.append(
+            cantools.database.can.Message(
+                frame_id=0x123,
+                name="Status",
+                length=8,
+                signals=signals or [],
+                senders=["ECU_A"],
+            )
+        )
+        save_database(db, path, None, "utf-8", backup=True)
+
+    def test_signal_add_list_show_json_utf8_and_default_backup(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "signals.dbc"
+            self.save_fixture(source)
+            original = source.read_bytes()
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "add",
+                    str(source),
+                    "0x123",
+                    "Temperature",
+                    "--start",
+                    "7",
+                    "--length",
+                    "16",
+                    "--byte-order",
+                    "big_endian",
+                    "--signed",
+                    "--factor",
+                    "0.5",
+                    "--offset",
+                    "-40",
+                    "--minimum",
+                    "-40",
+                    "--maximum",
+                    "215",
+                    "--unit",
+                    "°C",
+                    "--receiver",
+                    "ECU_A",
+                    "--receiver",
+                    "ECU_B",
+                    "--choice",
+                    "0=Off",
+                    "--choice",
+                    "0x1=On",
+                    "--comment",
+                    "温度 comment",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            expected = {
+                "name": "Temperature",
+                "start": 7,
+                "length": 16,
+                "byte_order": "big_endian",
+                "is_signed": True,
+                "factor": 0.5,
+                "offset": -40.0,
+                "minimum": -40.0,
+                "maximum": 215.0,
+                "unit": "°C",
+                "receivers": ["ECU_A", "ECU_B"],
+                "choices": {"0": "Off", "1": "On"},
+                "comment": "温度 comment",
+                "is_multiplexer": False,
+                "multiplexer_ids": None,
+                "multiplexer_signal": None,
+            }
+            self.assertEqual(
+                json.loads(out)["result"],
+                {
+                    **expected,
+                    "output": str(source),
+                    "backup": str(source) + ".bak",
+                },
+            )
+            self.assertEqual(Path(str(source) + ".bak").read_bytes(), original)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "Second",
+                    "--start",
+                    "16",
+                    "--length",
+                    "8",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+
+            code, out, err = run_cli(
+                ["--json", "signal", "list", str(source), "291", "--name", "Temperature"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"], {"signals": [expected]})
+
+            code, out, err = run_cli(
+                ["--json", "signal", "show", str(source), "Status", "Temperature"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"], expected)
+
+            code, out, err = run_cli(["signal", "list", str(source), "Status"])
+            self.assertEqual(code, 0, err)
+            self.assertIn("Temperature", out)
+            self.assertNotIn("Traceback", err)
+
+    def test_signal_update_clear_and_delete_to_separate_output(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "source.dbc"
+            output = Path(temporary_directory) / "deleted.dbc"
+            self.save_fixture(source)
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "State",
+                    "--start",
+                    "0",
+                    "--length",
+                    "8",
+                    "--factor",
+                    "2",
+                    "--offset",
+                    "1",
+                    "--minimum",
+                    "0",
+                    "--maximum",
+                    "100",
+                    "--unit",
+                    "rpm",
+                    "--receiver",
+                    "ECU_A",
+                    "--choice",
+                    "0=Off",
+                    "--comment",
+                    "Original",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "0x123",
+                    "State",
+                    "--new-name",
+                    "Renamed",
+                    "--start",
+                    "8",
+                    "--length",
+                    "16",
+                    "--byte-order",
+                    "little_endian",
+                    "--signed",
+                    "--factor",
+                    "0.25",
+                    "--offset",
+                    "-1",
+                    "--minimum",
+                    "-10",
+                    "--maximum",
+                    "10",
+                    "--unit",
+                    "V",
+                    "--receiver",
+                    "ECU_B",
+                    "--choice",
+                    "0x0=Low",
+                    "--comment",
+                    "Updated",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertEqual(result["name"], "Renamed")
+            self.assertEqual(result["start"], 8)
+            self.assertEqual(result["length"], 16)
+            self.assertTrue(result["is_signed"])
+            self.assertEqual(result["factor"], 0.25)
+            self.assertEqual(result["offset"], -1.0)
+            self.assertEqual(result["minimum"], -10.0)
+            self.assertEqual(result["maximum"], 10.0)
+            self.assertEqual(result["unit"], "V")
+            self.assertEqual(result["receivers"], ["ECU_B"])
+            self.assertEqual(result["choices"], {"0": "Low"})
+            self.assertEqual(result["comment"], "Updated")
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "Renamed",
+                    "--unsigned",
+                    "--clear-minimum",
+                    "--clear-maximum",
+                    "--clear-unit",
+                    "--clear-receivers",
+                    "--clear-choices",
+                    "--clear-comment",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertFalse(result["is_signed"])
+            self.assertIsNone(result["minimum"])
+            self.assertIsNone(result["maximum"])
+            self.assertIsNone(result["unit"])
+            self.assertEqual(result["receivers"], [])
+            self.assertIsNone(result["choices"])
+            self.assertIsNone(result["comment"])
+            self.assertEqual(result["factor"], 0.25)
+
+            before_delete = source.read_bytes()
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "delete",
+                    str(source),
+                    "Status",
+                    "Renamed",
+                    "--output",
+                    str(output),
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertEqual(result["name"], "Renamed")
+            self.assertEqual(result["output"], str(output))
+            self.assertIsNone(result["backup"])
+            self.assertEqual(source.read_bytes(), before_delete)
+            self.assertEqual(load_database(output, "utf-8").messages[0].signals, [])
+
+    def test_multiplexer_commands_rename_clear_and_encode_decode(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "multiplexed.dbc"
+            self.save_fixture(source)
+            commands = (
+                ["Mode", "0", "8", "--multiplexer"],
+                ["Speed", "8", "16", "--multiplexer-values", "0"],
+                [
+                    "Rpm",
+                    "8",
+                    "16",
+                    "--multiplexer-of",
+                    "Mode",
+                    "--multiplexer-values",
+                    "1",
+                ],
+            )
+            for name, start, length, *options in commands:
+                code, out, err = run_cli(
+                    [
+                        "--json",
+                        "signal",
+                        "add",
+                        str(source),
+                        "Status",
+                        name,
+                        "--start",
+                        start,
+                        "--length",
+                        length,
+                        "--no-backup",
+                    ]
+                    + options
+                )
+                self.assertEqual(code, 0, err)
+
+            code, out, err = run_cli(
+                ["--json", "signal", "show", str(source), "Status", "Rpm"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"]["multiplexer_signal"], "Mode")
+            self.assertEqual(json.loads(out)["result"]["multiplexer_ids"], [1])
+
+            db = load_database(source, "utf-8")
+            speed_data = db.encode_message(0x123, {"Mode": 0, "Speed": 0x1234})
+            rpm_data = db.encode_message(0x123, {"Mode": 1, "Rpm": 0x5678})
+            self.assertEqual(
+                db.decode_message(0x123, speed_data), {"Mode": 0, "Speed": 0x1234}
+            )
+            self.assertEqual(
+                db.decode_message(0x123, rpm_data), {"Mode": 1, "Rpm": 0x5678}
+            )
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "Mode",
+                    "--new-name",
+                    "State",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            code, out, err = run_cli(
+                ["--json", "signal", "show", str(source), "Status", "Speed"]
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(out)["result"]["multiplexer_signal"], "State")
+
+            original = source.read_bytes()
+            code, out, err = run_cli(
+                ["--json", "signal", "delete", str(source), "Status", "State"]
+            )
+            self.assertEqual(code, 1)
+            self.assertFalse(json.loads(out)["success"])
+            self.assertEqual(source.read_bytes(), original)
+            self.assertNotIn("Traceback", out)
+            self.assertNotIn("Traceback", err)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "delete",
+                    str(source),
+                    "Status",
+                    "Rpm",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "Speed",
+                    "--clear-multiplexer",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            result = json.loads(out)["result"]
+            self.assertIsNone(result["multiplexer_signal"])
+            self.assertIsNone(result["multiplexer_ids"])
+
+    def test_signal_expected_errors_preserve_source_without_tracebacks(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "errors.dbc"
+            self.save_fixture(
+                source,
+                [
+                    cantools.database.can.Signal(
+                        name="Existing", start=0, length=8, receivers=["ECU_A"]
+                    )
+                ],
+            )
+            original = source.read_bytes()
+            commands = (
+                [
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "Existing",
+                    "--start",
+                    "8",
+                    "--length",
+                    "8",
+                ],
+                [
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "BadReceiver",
+                    "--start",
+                    "8",
+                    "--length",
+                    "8",
+                    "--receiver",
+                    "Missing",
+                ],
+                [
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "BadRange",
+                    "--start",
+                    "8",
+                    "--length",
+                    "8",
+                    "--minimum",
+                    "2",
+                    "--maximum",
+                    "1",
+                ],
+                [
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "BadChoice",
+                    "--start",
+                    "8",
+                    "--length",
+                    "8",
+                    "--choice",
+                    "missing-separator",
+                ],
+                [
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "Existing",
+                    "--start",
+                    "-1",
+                ],
+                ["signal", "show", str(source), "Status", "Missing"],
+                ["signal", "delete", str(source), "Status", "Missing"],
+            )
+            for command in commands:
+                with self.subTest(command=command):
+                    code, out, err = run_cli(["--json"] + command)
+                    self.assertEqual(code, 1)
+                    self.assertFalse(json.loads(out)["success"])
+                    self.assertIn("error", json.loads(out))
+                    self.assertNotIn("Traceback", out)
+                    self.assertNotIn("Traceback", err)
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import math
 import re
 
 import cantools
-from cantools.database.can import Database, Message, Node
+from cantools.database.can import Database, Message, Node, Signal
 from cantools.database.can.formats.dbc import ATTRIBUTE_DEFINITION_VFRAMEFORMAT
 from cantools.database.can.formats.dbc_specifics import DbcSpecifics
+from cantools.database.conversion import BaseConversion
 
 from .errors import DBCError
+from .values import parse_integer
 
 
 def parse_frame_id(value: str | int) -> int:
@@ -287,6 +290,429 @@ class DBCService:
             self._refresh_after_rollback()
             raise
         return result
+
+    def list_signals(self, message_ref: str | int, name: str | None = None) -> list[dict]:
+        message = self._find_message(message_ref)
+        signals = message.signals
+        if name is not None:
+            signals = [signal for signal in signals if signal.name == name]
+        return [
+            self._signal_to_dict(signal)
+            for signal in sorted(signals, key=lambda signal: (signal.start, signal.name))
+        ]
+
+    def show_signal(self, message_ref: str | int, name: str) -> dict:
+        return self._signal_to_dict(self._find_signal(message_ref, name)[1])
+
+    def add_signal(self, message_ref: str | int, name: str, **fields) -> dict:
+        message = self._find_message(message_ref)
+        allowed = {
+            "start",
+            "length",
+            "byte_order",
+            "is_signed",
+            "factor",
+            "offset",
+            "minimum",
+            "maximum",
+            "unit",
+            "receivers",
+            "choices",
+            "comment",
+            "is_multiplexer",
+            "multiplexer_ids",
+            "multiplexer_signal",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise DBCError(f"Unknown signal fields: {', '.join(sorted(unknown))}.")
+        if "start" not in fields or "length" not in fields:
+            raise DBCError("Both start and length are required when adding a signal.")
+
+        signal = self._build_signal(message, name, fields)
+        self._check_signal_duplicate(message, name)
+        index = len(message.signals)
+        message.signals.append(signal)
+        try:
+            self._refresh_signals(message)
+        except DBCError:
+            message.signals.pop(index)
+            self._refresh_after_rollback()
+            raise
+        return self._signal_to_dict(signal)
+
+    def update_signal(self, message_ref: str | int, name: str, /, **changes) -> dict:
+        message, signal = self._find_signal(message_ref, name)
+        allowed = {
+            "name",
+            "start",
+            "length",
+            "byte_order",
+            "is_signed",
+            "factor",
+            "offset",
+            "minimum",
+            "maximum",
+            "unit",
+            "receivers",
+            "choices",
+            "comment",
+            "is_multiplexer",
+            "multiplexer_ids",
+            "multiplexer_signal",
+        }
+        unknown = set(changes) - allowed
+        if unknown:
+            raise DBCError(f"Unknown signal fields: {', '.join(sorted(unknown))}.")
+
+        updated_name = changes.get("name", signal.name)
+        replacement = self._build_signal(message, updated_name, changes, old=signal)
+        self._check_signal_duplicate(message, updated_name, exclude=signal)
+        dependents = [
+            other
+            for other in message.signals
+            if other is not signal and other.multiplexer_signal == signal.name
+        ]
+        if signal.is_multiplexer and not replacement.is_multiplexer and dependents:
+            raise DBCError(
+                f"Cannot remove multiplexer role from '{signal.name}' while branches reference it."
+            )
+
+        index = message.signals.index(signal)
+        changed_references = []
+        message.signals[index] = replacement
+        if updated_name != signal.name:
+            for dependent in dependents:
+                changed_references.append((dependent, dependent.multiplexer_signal))
+                dependent.multiplexer_signal = updated_name
+        try:
+            self._refresh_signals(message)
+        except DBCError:
+            message.signals[index] = signal
+            for dependent, old_parent in changed_references:
+                dependent.multiplexer_signal = old_parent
+            self._refresh_after_rollback()
+            raise
+        return self._signal_to_dict(replacement)
+
+    def delete_signal(self, message_ref: str | int, name: str) -> dict:
+        message, signal = self._find_signal(message_ref, name)
+        dependents = [
+            other.name
+            for other in message.signals
+            if other is not signal and other.multiplexer_signal == signal.name
+        ]
+        if dependents:
+            raise DBCError(
+                f"Cannot delete signal '{name}'; referenced by branches: {', '.join(dependents)}."
+            )
+
+        result = self._signal_to_dict(signal)
+        index = message.signals.index(signal)
+        message.signals.pop(index)
+        try:
+            self._refresh_signals(message)
+        except DBCError:
+            message.signals.insert(index, signal)
+            self._refresh_after_rollback()
+            raise
+        return result
+
+    def _find_signal(self, message_ref: str | int, name: str) -> tuple[Message, Signal]:
+        message = self._find_message(message_ref)
+        for signal in message.signals:
+            if signal.name == name:
+                return message, signal
+        raise DBCError(f"Signal '{name}' not found in message '{message.name}'.")
+
+    def _build_signal(
+        self,
+        message: Message,
+        name: str,
+        changes: dict,
+        old: Signal | None = None,
+    ) -> Signal:
+        changes = dict(changes)
+        changes.pop("name", None)
+        if old is None:
+            values = {
+                "start": None,
+                "length": None,
+                "byte_order": "little_endian",
+                "is_signed": False,
+                "factor": 1,
+                "offset": 0,
+                "minimum": None,
+                "maximum": None,
+                "unit": None,
+                "receivers": [],
+                "choices": None,
+                "comment": None,
+                "is_multiplexer": False,
+                "multiplexer_ids": None,
+                "multiplexer_signal": None,
+            }
+        else:
+            values = {
+                "start": old.start,
+                "length": old.length,
+                "byte_order": old.byte_order,
+                "is_signed": old.is_signed,
+                "factor": old.scale,
+                "offset": old.offset,
+                "minimum": old.minimum,
+                "maximum": old.maximum,
+                "unit": old.unit,
+                "receivers": list(old.receivers),
+                "choices": (
+                    {
+                        raw_value: str(label)
+                        for raw_value, label in old.choices.items()
+                    }
+                    if old.choices is not None
+                    else None
+                ),
+                "comment": old.comment,
+                "is_multiplexer": old.is_multiplexer,
+                "multiplexer_ids": old.multiplexer_ids,
+                "multiplexer_signal": old.multiplexer_signal,
+            }
+        values.update(changes)
+        values = self._validate_signal_values(message, name, values, old=old)
+
+        try:
+            conversion = BaseConversion.factory(
+                scale=values["factor"],
+                offset=values["offset"],
+                choices=values["choices"],
+                is_float=old.is_float if old is not None else False,
+            )
+            comment = (
+                values["comment"]
+                if old is None or "comment" in changes
+                else old.comments
+            )
+            return Signal(
+                name=name,
+                start=values["start"],
+                length=values["length"],
+                byte_order=values["byte_order"],
+                is_signed=values["is_signed"],
+                raw_initial=old.raw_initial if old is not None else None,
+                raw_invalid=old.raw_invalid if old is not None else None,
+                conversion=conversion,
+                minimum=values["minimum"],
+                maximum=values["maximum"],
+                unit=values["unit"],
+                dbc_specifics=old.dbc if old is not None else None,
+                comment=comment,
+                receivers=values["receivers"],
+                is_multiplexer=values["is_multiplexer"],
+                multiplexer_ids=values["multiplexer_ids"],
+                multiplexer_signal=values["multiplexer_signal"],
+                spn=old.spn if old is not None else None,
+            )
+        except (KeyError, TypeError, ValueError, cantools.database.errors.Error) as exc:
+            raise DBCError(f"Invalid signal '{name}': {exc}") from exc
+
+    def _validate_signal_values(
+        self,
+        message: Message,
+        name: str,
+        values: dict,
+        old: Signal | None,
+    ) -> dict:
+        if not isinstance(name, str) or not name:
+            raise DBCError("Signal name must be a non-empty string.")
+        values["start"] = parse_integer(values["start"])
+        values["length"] = parse_integer(values["length"])
+        if values["start"] < 0:
+            raise DBCError("Signal start must be nonnegative.")
+        if values["length"] <= 0:
+            raise DBCError("Signal length must be positive.")
+        if values["byte_order"] not in ("little_endian", "big_endian"):
+            raise DBCError("Signal byte order must be little_endian or big_endian.")
+        for field in ("is_signed", "is_multiplexer"):
+            if not isinstance(values[field], bool):
+                raise DBCError(f"Signal {field} must be boolean.")
+
+        for field in ("factor", "offset", "minimum", "maximum"):
+            value = values[field]
+            if value is None and field in ("minimum", "maximum"):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise DBCError(f"Signal {field} must be a number.")
+            if isinstance(value, float) and not math.isfinite(value):
+                raise DBCError(f"Signal {field} must be finite.")
+        if (
+            values["minimum"] is not None
+            and values["maximum"] is not None
+            and values["minimum"] > values["maximum"]
+        ):
+            raise DBCError("Signal minimum must not exceed maximum.")
+
+        for field in ("unit", "comment"):
+            if values[field] is not None and not isinstance(values[field], str):
+                raise DBCError(f"Signal {field} must be a string or null.")
+
+        receivers = values["receivers"]
+        if isinstance(receivers, (str, bytes)):
+            raise DBCError("Signal receivers must be a list of node names.")
+        try:
+            receivers = list(receivers)
+        except TypeError as exc:
+            raise DBCError("Signal receivers must be a list of node names.") from exc
+        for receiver in receivers:
+            if not isinstance(receiver, str):
+                raise DBCError("Signal receiver names must be strings.")
+            self._find_node(receiver)
+        values["receivers"] = receivers
+
+        choices = values["choices"]
+        if choices is not None:
+            if not isinstance(choices, dict):
+                raise DBCError("Signal choices must be a dictionary of integer labels.")
+            normalized_choices = {}
+            for raw_value, label in choices.items():
+                if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+                    raise DBCError("Signal choice values must be integers.")
+                if not isinstance(label, str) or not label:
+                    raise DBCError("Signal choice labels must be non-empty strings.")
+                normalized_choices[raw_value] = label
+            values["choices"] = {
+                raw_value: normalized_choices[raw_value]
+                for raw_value in sorted(normalized_choices)
+            }
+
+        multiplexer_ids = values["multiplexer_ids"]
+        if multiplexer_ids is not None:
+            if isinstance(multiplexer_ids, (str, bytes)):
+                raise DBCError("Multiplexer IDs must be a list of nonnegative integers.")
+            try:
+                multiplexer_ids = [
+                    parse_integer(multiplexer_id)
+                    for multiplexer_id in list(multiplexer_ids)
+                ]
+            except TypeError as exc:
+                raise DBCError(
+                    "Multiplexer IDs must be a list of nonnegative integers."
+                ) from exc
+            if not multiplexer_ids or any(
+                multiplexer_id < 0 for multiplexer_id in multiplexer_ids
+            ):
+                raise DBCError("Multiplexer IDs must be nonempty and nonnegative.")
+            multiplexer_ids = sorted(set(multiplexer_ids))
+            values["multiplexer_ids"] = multiplexer_ids
+
+        parent = values["multiplexer_signal"]
+        if parent is not None and (not isinstance(parent, str) or not parent):
+            raise DBCError("Multiplexer parent must be a non-empty signal name.")
+        if parent is None and multiplexer_ids is not None:
+            if len(multiplexer_ids) != 1:
+                raise DBCError(
+                    "An explicit multiplexer parent is required for multiple IDs."
+                )
+            roots = [
+                signal
+                for signal in message.signals
+                if signal is not old
+                and signal.is_multiplexer
+                and signal.multiplexer_signal is None
+            ]
+            if len(roots) != 1:
+                raise DBCError(
+                    "An explicit multiplexer parent is required unless the message has one root selector."
+                )
+            parent = roots[0].name
+            values["multiplexer_signal"] = parent
+        if (parent is None) != (multiplexer_ids is None):
+            raise DBCError("Multiplexer parent and IDs must be assigned together.")
+
+        if parent is not None:
+            if parent == name:
+                raise DBCError("A signal cannot be its own multiplexer parent.")
+            candidates = [
+                signal
+                for signal in message.signals
+                if signal is not old and signal.name == parent
+            ]
+            if not candidates:
+                raise DBCError(f"Multiplexer parent '{parent}' not found.")
+            parent_signal = candidates[0]
+            seen = {name}
+            current = parent_signal
+            while current is not None:
+                if current.name in seen:
+                    raise DBCError("Multiplexer assignments must not contain cycles.")
+                if not current.is_multiplexer:
+                    raise DBCError(
+                        f"Multiplexer parent '{current.name}' is not a selector."
+                    )
+                seen.add(current.name)
+                ancestor_name = current.multiplexer_signal
+                if ancestor_name is None:
+                    break
+                if ancestor_name == name:
+                    raise DBCError("Multiplexer assignments must not contain cycles.")
+                current = next(
+                    (
+                        signal
+                        for signal in message.signals
+                        if signal is not old and signal.name == ancestor_name
+                    ),
+                    None,
+                )
+                if current is None:
+                    raise DBCError(f"Multiplexer parent '{ancestor_name}' not found.")
+        return values
+
+    @staticmethod
+    def _check_signal_duplicate(
+        message: Message, name: str, exclude: Signal | None = None
+    ) -> None:
+        if any(
+            signal is not exclude and signal.name == name for signal in message.signals
+        ):
+            raise DBCError(f"Signal '{name}' already exists in message '{message.name}'.")
+
+    def _refresh_signals(self, message: Message) -> None:
+        try:
+            message.refresh(strict=True)
+        except (KeyError, TypeError, ValueError, cantools.database.errors.Error) as exc:
+            raise DBCError(f"Invalid DBC database: {exc}") from exc
+        self._refresh_database()
+
+    @staticmethod
+    def _signal_to_dict(signal: Signal) -> dict:
+        return {
+            "name": signal.name,
+            "start": signal.start,
+            "length": signal.length,
+            "byte_order": signal.byte_order,
+            "is_signed": signal.is_signed,
+            "factor": signal.scale,
+            "offset": signal.offset,
+            "minimum": signal.minimum,
+            "maximum": signal.maximum,
+            "unit": signal.unit,
+            "receivers": list(signal.receivers),
+            "choices": (
+                {
+                    raw_value: str(signal.choices[raw_value])
+                    for raw_value in sorted(signal.choices)
+                }
+                if signal.choices is not None
+                else None
+            ),
+            "comment": signal.comment,
+            "is_multiplexer": signal.is_multiplexer,
+            "multiplexer_ids": (
+                sorted(signal.multiplexer_ids)
+                if signal.multiplexer_ids is not None
+                else None
+            ),
+            "multiplexer_signal": signal.multiplexer_signal,
+        }
 
     def _find_message(self, reference: str | int) -> Message:
         if isinstance(reference, str):
