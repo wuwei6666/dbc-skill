@@ -1,0 +1,2 @@
+class DBCError(Exception):
+    pass
