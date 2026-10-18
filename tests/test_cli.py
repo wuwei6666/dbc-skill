@@ -467,6 +467,10 @@ class MessageCommandTests(unittest.TestCase):
             self.assertEqual(result["cycle_time"], 250)
             self.assertEqual(result["comment"], "Updated")
 
+            reloaded = load_database(source, "utf-8").messages[0]
+            self.assertTrue(reloaded.is_extended_frame)
+            self.assertTrue(reloaded.is_fd)
+
             code, out, err = run_cli(
                 [
                     "--json",
@@ -498,6 +502,8 @@ class MessageCommandTests(unittest.TestCase):
             self.assertEqual(reloaded.senders, ["ECU_B", "ECU_A"])
             self.assertIsNone(reloaded.cycle_time)
             self.assertIsNone(reloaded.comment)
+            self.assertFalse(reloaded.is_extended_frame)
+            self.assertFalse(reloaded.is_fd)
 
     def test_message_delete_to_separate_output_reports_signal_count(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

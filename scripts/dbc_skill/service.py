@@ -268,6 +268,8 @@ class DBCService:
                 raise
             raise DBCError(f"Invalid message update: {exc}") from exc
 
+        if "extended" in changes or "fd" in changes:
+            self._clear_frame_format_metadata(message)
         if message.is_fd:
             self._ensure_fd_metadata()
         return self._message_to_dict(message)
@@ -374,6 +376,11 @@ class DBCService:
                 raise DBCError(f"Message frame ID '{frame_id}' already exists.")
             if message.name == name:
                 raise DBCError(f"Message name '{name}' already exists.")
+
+    @staticmethod
+    def _clear_frame_format_metadata(message: Message) -> None:
+        if message.dbc is not None and message.dbc.attributes is not None:
+            message.dbc.attributes.pop("VFrameFormat", None)
 
     def _ensure_fd_metadata(self) -> None:
         if self.db.dbc is None:

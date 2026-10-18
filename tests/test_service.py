@@ -274,34 +274,49 @@ class MessageServiceTests(unittest.TestCase):
             service.show_message("0x123")
 
     def test_update_frame_type_fd_metadata_and_clear_nullable_fields(self):
-        service = self.make_service(self.make_message())
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "frame-format.dbc"
+            service = self.make_service(self.make_message())
 
-        updated = service.update_message(
-            "Status",
-            extended=True,
-            fd=True,
-            length=64,
-            cycle_time=250,
-            comment="Updated",
-        )
-        self.assertTrue(updated["is_extended_frame"])
-        self.assertTrue(updated["is_fd"])
-        self.assertEqual(updated["length"], 64)
-        self.assertEqual(updated["cycle_time"], 250)
-        self.assertEqual(updated["comment"], "Updated")
+            updated = service.update_message(
+                "Status",
+                extended=False,
+                fd=True,
+                length=64,
+                cycle_time=250,
+                comment="Updated",
+            )
+            self.assertFalse(updated["is_extended_frame"])
+            self.assertTrue(updated["is_fd"])
+            self.assertEqual(updated["length"], 64)
+            self.assertEqual(updated["cycle_time"], 250)
+            self.assertEqual(updated["comment"], "Updated")
 
-        cleared = service.update_message(
-            "Status",
-            extended=False,
-            fd=False,
-            length=8,
-            cycle_time=None,
-            comment=None,
-        )
-        self.assertFalse(cleared["is_extended_frame"])
-        self.assertFalse(cleared["is_fd"])
-        self.assertIsNone(cleared["cycle_time"])
-        self.assertIsNone(cleared["comment"])
+            save_database(service.db, source, None, "utf-8", backup=True)
+            service = DBCService(load_database(source, "utf-8"))
+            reloaded = service.show_message("Status")
+            self.assertFalse(reloaded["is_extended_frame"])
+            self.assertTrue(reloaded["is_fd"])
+
+            cleared = service.update_message(
+                "Status",
+                extended=False,
+                fd=False,
+                length=8,
+                cycle_time=None,
+                comment=None,
+            )
+            self.assertFalse(cleared["is_extended_frame"])
+            self.assertFalse(cleared["is_fd"])
+            self.assertIsNone(cleared["cycle_time"])
+            self.assertIsNone(cleared["comment"])
+
+            save_database(service.db, source, None, "utf-8", backup=True)
+            reloaded = DBCService(load_database(source, "utf-8")).show_message(
+                "Status"
+            )
+            self.assertFalse(reloaded["is_extended_frame"])
+            self.assertFalse(reloaded["is_fd"])
 
     def test_frame_id_and_dlc_boundaries_are_enforced(self):
         invalid_ids = (
