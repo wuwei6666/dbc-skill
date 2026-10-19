@@ -90,6 +90,16 @@ python3 scripts/dbc_crud.py excel import INPUT.xlsx OUTPUT.dbc
 - A successful import replaces an existing `OUTPUT.dbc` atomically without creating a `.bak` copy: `backup` is always `null` in the result.
 - Sheets other than the five documented sheets are ignored, and their names are reported in `result.warnings`.
 
+<!-- excel-import-warnings-example -->
+
+This is real output from `python3 scripts/dbc_crud.py --json excel import extra-sheet.xlsx out.dbc` for a workbook that contains one extra sheet named `ScratchPad`:
+
+```json
+{"operation": "excel", "result": {"backup": null, "format": "dbc-skill-excel", "input": "/tmp/extra-sheet.xlsx", "message_count": 1, "node_count": 1, "output": "/tmp/extra-sheet.dbc", "schema_version": "1", "signal_count": 1, "warnings": ["ScratchPad"]}, "success": true}
+```
+
+Here `result.warnings` is `["ScratchPad"]`, so the extra sheet was ignored by name rather than failing the import, and `result.backup` is `null`.
+
 ### Formula safety
 
 Formulas are not allowed in structured cells: any data row containing a formula fails the import with "formulas are not allowed in structured cells". Before importing a workbook that was computed in Excel, copy the edited region and use Paste Special → Values (or paste as values in your spreadsheet application) so every structured cell holds a literal.
@@ -116,7 +126,7 @@ Duplicate metadata keys are rejected; unlisted extra keys are ignored.
 
 `Signals` columns: `message_frame_id`, `message_is_extended_frame`, `name` (required), `start` (required), `length` (required), `byte_order`, `is_signed`, `factor`, `offset`, `minimum`, `maximum`, `unit`, `receivers`, `comment`, `is_multiplexer`, `multiplexer_signal`, `multiplexer_ids`. A signal's parent message is identified by `(message_frame_id, message_is_extended_frame)`, matching comparison identity.
 
-`Choices` columns: `message_frame_id`, `message_is_extended_frame`, `signal_name`, `raw_value`, `label`. A Choices row belongs to the signal named `signal_name` inside the message identified by `(message_frame_id, message_is_extended_frame)`; the parent signal must exist. `raw_value` is a decimal or `0x` hexadecimal integer, unique per signal; `label` is required text.
+`Choices` columns: `message_frame_id`, `message_is_extended_frame`, `signal_name`, `raw_value`, `label`. A Choices row belongs to the signal named `signal_name` inside the message identified by `(message_frame_id, message_is_extended_frame)`; the parent signal must exist. `raw_value` is a decimal or `0x` hexadecimal integer and may be negative — `-1` and `-0x2` are both accepted, which matters for signed signals; raw values must be unique per signal. `label` is required text.
 
 ### Cell syntax and defaults
 
@@ -124,9 +134,14 @@ Duplicate metadata keys are rejected; unlisted extra keys are ignored.
 - **Booleans** (`is_extended_frame`, `message_is_extended_frame`, `is_fd`, `is_signed`, `is_multiplexer`): `TRUE/FALSE`, `yes/no`, or `1/0`, case-insensitive; blank means `FALSE`.
 - **`byte_order`**: `little_endian` or `big_endian`; blank means `little_endian`.
 - **Name lists** (`senders`, `receivers`): one comma-separated cell; blank means none. Every name must exist as a node.
-- **`multiplexer_ids`**: the same comma-separated values and inclusive ranges as the CLI `--multiplexer-values` argument — `1,2`, `2-4`, or the mixed `0,2-4,0xA`. A bare integer cell is a single ID; blank means no branch assignment. Export compacts sorted IDs into ranges such as `2-4`.
+- **`multiplexer_ids`**: the same comma-separated values and inclusive ranges as the CLI `--multiplexer-values` argument — `1,2`, `2-4`, or the mixed `0,2-4,0xA`. A bare integer cell is a single ID; blank means no branch assignment. Export compacts sorted IDs into ranges such as `2-4`. Descending ranges such as `4-2` are rejected, exactly as on the CLI.
 - **Multiplexer structure**: `multiplexer_signal` names the parent selector in the same message, and `multiplexer_ids` lists its branch values; set both or neither, exactly as with the CLI. Root selectors have `is_multiplexer` TRUE with blank parent and IDs.
 - **Defaults for blank cells**: `factor` → 1, `offset` → 0, booleans → FALSE, `byte_order` → `little_endian`, name lists → empty, `cycle_time`/`minimum`/`maximum` and optional text → null. Signal bounds must be both present or both blank.
+
+### Text and numeric cells
+
+- **Text**: `comment`, `unit`, and `label` cells are Unicode text and round-trip as-is with the default UTF-8 encoding, including CJK labels such as `中文标签`. Embedded newlines in comments survive export and import. The one explicit limitation is the double quote in choice labels: a `label` containing `"` is not representable in DBC `VAL_` syntax, so the save-time verification fails, the import exits 1, and the destination is left untouched. Remove or replace double quotes in labels before importing. Formulas are never text: paste computed cells as values first (see [Formula safety](#formula-safety)).
+- **Numbers**: `factor`, `offset`, `minimum`, and `maximum` accept numeric cells or text cells in decimal or scientific notation, such as `0.5` or `1e-3`. Non-finite values such as `NaN` or `inf` are rejected. Export writes real numeric cells, not text, so Excel's display formatting (for example, rounded decimal places) never changes the stored value.
 
 ### Semantic round-trip verification
 

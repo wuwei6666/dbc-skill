@@ -454,6 +454,41 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertLess(document.index("excel export"), document.index("excel import"))
             self.assertLess(document.index("excel import"), document.rindex("compare"))
 
+    def test_excel_documentation_covers_verified_edge_cases(self):
+        reference = read_document("references/cli-reference.md")
+
+        self.assert_contains_all(
+            reference,
+            (
+                "-1",
+                "-0x2",
+                "4-2",
+                "descending",
+                "Unicode",
+                "newline",
+                "double quote",
+                "1e-3",
+                "NaN",
+            ),
+        )
+
+    def test_excel_import_warnings_example_is_real_json(self):
+        reference = read_document("references/cli-reference.md")
+        self.assertIn("<!-- excel-import-warnings-example -->", reference)
+        example_section = reference.split("<!-- excel-import-warnings-example -->", 1)[1]
+        match = re.search(r"```json\n(.*?)\n```", example_section, re.DOTALL)
+
+        self.assertIsNotNone(match, "warnings example must be a JSON code block")
+        payload = json.loads(match.group(1))
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["operation"], "excel")
+        result = payload["result"]
+        self.assertEqual(result["format"], "dbc-skill-excel")
+        self.assertEqual(result["schema_version"], "1")
+        self.assertIsNone(result["backup"])
+        self.assertTrue(result["warnings"])
+        self.assertIsInstance(result["warnings"][0], str)
+
     def test_license_is_mit(self):
         license_text = read_document("LICENSE")
 
