@@ -128,6 +128,121 @@ class StorageTests(unittest.TestCase):
                     self.assertEqual(source.read_bytes(), original)
                     self.assertFalse(Path(str(source) + ".bak").exists())
 
+    def test_reload_losing_multiplexer_id_preserves_source_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "extended.dbc"
+            db = cantools.database.Database()
+            db.messages.append(
+                cantools.database.can.Message(
+                    frame_id=0x123,
+                    name="Status",
+                    length=8,
+                    signals=[
+                        cantools.database.can.Signal(
+                            name="Mode", start=0, length=8, is_multiplexer=True
+                        ),
+                        cantools.database.can.Signal(
+                            name="SubMode",
+                            start=8,
+                            length=8,
+                            is_multiplexer=True,
+                            multiplexer_signal="Mode",
+                            multiplexer_ids=[1, 2],
+                        ),
+                        cantools.database.can.Signal(
+                            name="Payload",
+                            start=16,
+                            length=16,
+                            multiplexer_signal="SubMode",
+                            multiplexer_ids=[3],
+                        ),
+                    ],
+                )
+            )
+            save_database(db, source, None, "utf-8", backup=False)
+            original = source.read_bytes()
+            real_load_file = cantools.database.load_file
+
+            def load_and_lose_multiplexer_id(path, **kwargs):
+                reloaded = real_load_file(path, **kwargs)
+                sub_mode = next(
+                    signal
+                    for signal in reloaded.messages[0].signals
+                    if signal.name == "SubMode"
+                )
+                sub_mode.multiplexer_ids = [1]
+                return reloaded
+
+            with mock.patch(
+                "scripts.dbc_skill.storage.cantools.database.load_file",
+                side_effect=load_and_lose_multiplexer_id,
+            ):
+                with self.assertRaises(DBCError) as raised:
+                    save_database(db, source, None, "utf-8", backup=True)
+
+            self.assertIn("multiplexer", str(raised.exception).lower())
+            self.assertEqual(source.read_bytes(), original)
+            self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_cantools_serialization_errors_preserve_source_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for index, exception in enumerate(
+                (TypeError("unsupported construct"), KeyError("corrupt metadata"))
+            ):
+                with self.subTest(exception=type(exception).__name__):
+                    source = Path(temporary_directory) / f"serialize-{index}.dbc"
+                    original = cantools.database.Database().as_dbc_string().encode(
+                        "utf-8"
+                    )
+                    source.write_bytes(original)
+                    db = load_database(source, "utf-8")
+
+                    with mock.patch(
+                        "scripts.dbc_skill.storage.Database.as_dbc_string",
+                        side_effect=exception,
+                    ):
+                        with self.assertRaises(DBCError):
+                            save_database(db, source, None, "utf-8", backup=True)
+
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_representable_comments_round_trip_with_explicit_encodings(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for encoding in ("utf-8", "cp936"):
+                with self.subTest(encoding=encoding):
+                    source = Path(temporary_directory) / f"comments-{encoding}.dbc"
+                    comment = "温度 comment"
+                    db = cantools.database.Database()
+                    db.nodes.append(
+                        cantools.database.can.Node(name="ECU", comment=comment)
+                    )
+                    db.messages.append(
+                        cantools.database.can.Message(
+                            frame_id=0x123,
+                            name="Status",
+                            length=8,
+                            senders=["ECU"],
+                            comment=comment,
+                            signals=[
+                                cantools.database.can.Signal(
+                                    name="State",
+                                    start=0,
+                                    length=8,
+                                    receivers=["ECU"],
+                                    comment=comment,
+                                )
+                            ],
+                        )
+                    )
+
+                    save_database(db, source, None, encoding, backup=False)
+                    reloaded = load_database(source, encoding)
+
+                    self.assertEqual(reloaded.nodes[0].comment, comment)
+                    self.assertEqual(reloaded.messages[0].comment, comment)
+                    self.assertEqual(reloaded.messages[0].signals[0].comment, comment)
+
 
 class NodeCommandTests(unittest.TestCase):
     def initialize(self, path):

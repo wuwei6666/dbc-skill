@@ -205,5 +205,163 @@ class StandardMultiplexingTests(unittest.TestCase):
             )
 
 
+class ExtendedMultiplexingTests(unittest.TestCase):
+    def make_service(self):
+        service = DBCService(Database())
+        service.add_message(0x123, "Status", 8, [], False, False, None, None)
+        return service
+
+    def add_extended_multiplexing(self, service):
+        service.add_signal("Status", "Mode", start=0, length=8, is_multiplexer=True)
+        service.add_signal(
+            "Status",
+            "SubMode",
+            start=8,
+            length=8,
+            is_multiplexer=True,
+            multiplexer_signal="Mode",
+            multiplexer_ids=[1, 2],
+        )
+        service.add_signal(
+            "Status",
+            "Payload",
+            start=16,
+            length=16,
+            multiplexer_signal="SubMode",
+            multiplexer_ids=[3],
+        )
+        service.add_signal("Status", "AliveCounter", start=32, length=8)
+
+    def assert_extended_metadata(self, service):
+        sub_mode = service.show_signal("Status", "SubMode")
+        self.assertTrue(sub_mode["is_multiplexer"])
+        self.assertEqual(sub_mode["multiplexer_signal"], "Mode")
+        self.assertEqual(sub_mode["multiplexer_ids"], [1, 2])
+        payload = service.show_signal("Status", "Payload")
+        self.assertEqual(payload["multiplexer_signal"], "SubMode")
+        self.assertEqual(payload["multiplexer_ids"], [3])
+
+    def test_nested_multiplexing_round_trip_encode_decode_and_unrelated_update(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "extended.dbc"
+            service = self.make_service()
+            self.add_extended_multiplexing(service)
+            self.assert_extended_metadata(service)
+
+            save_database(service.db, source, None, "utf-8", backup=False)
+
+            self.assertIn("SG_MUL_VAL_", source.read_text(encoding="utf-8"))
+            reloaded = DBCService(load_database(source, "utf-8"))
+            self.assert_extended_metadata(reloaded)
+            data = reloaded.db.encode_message(
+                0x123,
+                {"Mode": 2, "SubMode": 3, "Payload": 0x1234, "AliveCounter": 7},
+            )
+            self.assertEqual(
+                reloaded.db.decode_message(0x123, data),
+                {"Mode": 2, "SubMode": 3, "Payload": 0x1234, "AliveCounter": 7},
+            )
+
+            from cantools.database.can.formats.dbc_specifics import DbcSpecifics
+
+            alive_counter = next(
+                signal
+                for signal in reloaded.db.messages[0].signals
+                if signal.name == "AliveCounter"
+            )
+            alive_counter.dbc = DbcSpecifics()
+            original_dbc = alive_counter.dbc
+            reloaded.update_signal("Status", "AliveCounter", comment="Updated")
+            updated = next(
+                signal
+                for signal in reloaded.db.messages[0].signals
+                if signal.name == "AliveCounter"
+            )
+            self.assertIs(updated.dbc, original_dbc)
+            self.assert_extended_metadata(reloaded)
+            save_database(reloaded.db, source, None, "utf-8", backup=False)
+            self.assert_extended_metadata(DBCService(load_database(source, "utf-8")))
+
+    def test_multi_value_range_round_trip_and_encode_decode(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "ranges.dbc"
+            service = self.make_service()
+            service.add_signal(
+                "Status", "Mode", start=0, length=8, is_multiplexer=True
+            )
+            service.add_signal(
+                "Status",
+                "Payload",
+                start=8,
+                length=8,
+                multiplexer_signal="Mode",
+                multiplexer_ids=[2, 3, 4, 10],
+            )
+
+            save_database(service.db, source, None, "utf-8", backup=False)
+
+            self.assertIn("SG_MUL_VAL_", source.read_text(encoding="utf-8"))
+            reloaded = DBCService(load_database(source, "utf-8"))
+            self.assertEqual(
+                reloaded.show_signal("Status", "Payload")["multiplexer_ids"],
+                [2, 3, 4, 10],
+            )
+            data = reloaded.db.encode_message(0x123, {"Mode": 10, "Payload": 0x5A})
+            self.assertEqual(
+                reloaded.db.decode_message(0x123, data),
+                {"Mode": 10, "Payload": 0x5A},
+            )
+
+    def test_invalid_extended_metadata_fails_before_replacing_source(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for case in ("not-selector", "cycle", "duplicate", "negative"):
+                with self.subTest(case=case):
+                    source = Path(temporary_directory) / f"{case}.dbc"
+                    service = self.make_service()
+                    self.add_extended_multiplexing(service)
+                    save_database(service.db, source, None, "utf-8", backup=False)
+                    original = source.read_bytes()
+                    signals = {
+                        signal.name: signal
+                        for signal in service.db.messages[0].signals
+                    }
+                    if case == "not-selector":
+                        signals["SubMode"].is_multiplexer = False
+                    elif case == "cycle":
+                        signals["Mode"].multiplexer_signal = "SubMode"
+                        signals["Mode"].multiplexer_ids = [3]
+                    elif case == "duplicate":
+                        signals["SubMode"].multiplexer_ids = [1, 1, 2]
+                    else:
+                        signals["Payload"].multiplexer_ids = [-1]
+
+                    with self.assertRaises(DBCError):
+                        save_database(service.db, source, None, "utf-8", backup=True)
+
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_validate_rejects_cyclic_extended_metadata(self):
+        service = self.make_service()
+        self.add_extended_multiplexing(service)
+        mode = next(
+            signal
+            for signal in service.db.messages[0].signals
+            if signal.name == "Mode"
+        )
+        mode.multiplexer_signal = "SubMode"
+        mode.multiplexer_ids = [3]
+
+        with self.assertRaises(DBCError):
+            service.validate()
+
+    def test_multiplexer_range_parsing(self):
+        from scripts.dbc_skill.values import parse_multiplexer_values
+
+        self.assertEqual(parse_multiplexer_values("0,2-4,0xA"), [0, 2, 3, 4, 10])
+        with self.assertRaises(DBCError):
+            parse_multiplexer_values("4-2")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,77 @@ def parse_frame_id(value: str | int) -> int:
     return frame_id
 
 
+def validate_multiplexer_metadata(db: Database) -> None:
+    for message in db.messages:
+        signals_by_name = {}
+        for signal in message.signals:
+            if signal.name in signals_by_name:
+                raise DBCError(
+                    f"Signal '{signal.name}' is duplicated in message '{message.name}'."
+                )
+            signals_by_name[signal.name] = signal
+
+        for signal in message.signals:
+            if not isinstance(signal.is_multiplexer, bool):
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer role must be boolean."
+                )
+            parent_name = signal.multiplexer_signal
+            multiplexer_ids = signal.multiplexer_ids
+            if (parent_name is None) != (multiplexer_ids is None):
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer parent and IDs must be assigned together."
+                )
+            if parent_name is None:
+                continue
+            if not isinstance(parent_name, str) or not parent_name:
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer parent must be a non-empty signal name."
+                )
+            if isinstance(multiplexer_ids, (str, bytes)):
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer IDs must be nonnegative integers."
+                )
+            try:
+                normalized_ids = list(multiplexer_ids)
+            except TypeError as exc:
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer IDs must be nonnegative integers."
+                ) from exc
+            if not normalized_ids or any(
+                isinstance(multiplexer_id, bool)
+                or not isinstance(multiplexer_id, int)
+                or multiplexer_id < 0
+                for multiplexer_id in normalized_ids
+            ):
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer IDs must be nonempty and nonnegative."
+                )
+            if len(set(normalized_ids)) != len(normalized_ids):
+                raise DBCError(
+                    f"Signal '{signal.name}' multiplexer IDs must not contain duplicates."
+                )
+            parent = signals_by_name.get(parent_name)
+            if parent is None:
+                raise DBCError(
+                    f"Multiplexer parent '{parent_name}' not found for signal '{signal.name}'."
+                )
+            if not parent.is_multiplexer:
+                raise DBCError(
+                    f"Multiplexer parent '{parent_name}' is not a selector."
+                )
+
+        for signal in message.signals:
+            seen = {signal.name}
+            current = signal
+            while current.multiplexer_signal is not None:
+                parent_name = current.multiplexer_signal
+                if parent_name in seen:
+                    raise DBCError("Multiplexer assignments must not contain cycles.")
+                seen.add(parent_name)
+                current = signals_by_name[parent_name]
+
+
 class DBCService:
     def __init__(self, db: Database):
         self.db = db
@@ -50,6 +121,7 @@ class DBCService:
         }
 
     def validate(self) -> dict:
+        validate_multiplexer_metadata(self.db)
         try:
             self.db.refresh()
         except (KeyError, ValueError, cantools.database.errors.Error) as exc:
