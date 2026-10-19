@@ -641,6 +641,69 @@ class SignalServiceTests(unittest.TestCase):
         self.assertEqual(cleared["factor"], 0.25)
         self.assertEqual(cleared["offset"], -1)
 
+    def test_unrepresentable_bounds_are_rejected_without_mutation(self):
+        invalid_bounds = ((None, 100), (-10, None), (0, 0))
+        for minimum, maximum in invalid_bounds:
+            with self.subTest(minimum=minimum, maximum=maximum):
+                service = self.make_service()
+                with self.assertRaises(DBCError) as raised:
+                    service.add_signal(
+                        "Status",
+                        "Invalid",
+                        start=0,
+                        length=8,
+                        minimum=minimum,
+                        maximum=maximum,
+                    )
+                self.assertIn("bound", str(raised.exception).lower())
+                self.assertEqual(service.list_signals("Status"), [])
+
+        for field in ("minimum", "maximum"):
+            with self.subTest(cleared_field=field):
+                service = self.make_service()
+                service.add_signal(
+                    "Status",
+                    "State",
+                    start=0,
+                    length=8,
+                    minimum=-10,
+                    maximum=100,
+                )
+                with self.assertRaises(DBCError):
+                    service.update_signal("Status", "State", **{field: None})
+                state = service.show_signal("Status", "State")
+                self.assertEqual(state["minimum"], -10)
+                self.assertEqual(state["maximum"], 100)
+
+    def test_representable_bounds_survive_save_reload(self):
+        representable_bounds = (
+            (None, None),
+            (0, 100),
+            (-10, 0),
+            (0.0, 0.0),
+            (0, 0.0),
+            (0.0, 0),
+            (-40, 215),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for index, (minimum, maximum) in enumerate(representable_bounds):
+                with self.subTest(minimum=minimum, maximum=maximum):
+                    source = Path(temporary_directory) / f"bounds-{index}.dbc"
+                    service = self.make_service()
+                    service.add_signal(
+                        "Status",
+                        "State",
+                        start=0,
+                        length=8,
+                        minimum=minimum,
+                        maximum=maximum,
+                    )
+                    save_database(service.db, source, None, "utf-8", backup=False)
+                    reloaded = DBCService(load_database(source, "utf-8"))
+                    state = reloaded.show_signal("Status", "State")
+                    self.assertEqual(state["minimum"], minimum)
+                    self.assertEqual(state["maximum"], maximum)
+
     def test_validation_duplicates_and_missing_references(self):
         service = self.make_service()
         service.add_signal("Status", "Existing", start=0, length=8)

@@ -9,6 +9,7 @@ import cantools
 from cantools.database.can import Database
 
 from .errors import DBCError
+from .values import validate_signal_bounds
 
 
 def load_database(path: Path, encoding: str) -> Database:
@@ -25,6 +26,10 @@ def save_database(
     encoding: str,
     backup: bool,
 ) -> dict:
+    for message in db.messages:
+        for signal in message.signals:
+            validate_signal_bounds(signal.minimum, signal.maximum)
+
     backup_path = None
     try:
         db.refresh()

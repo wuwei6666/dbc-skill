@@ -75,3 +75,12 @@ def parse_multiplexer_values(value: str) -> list[int]:
             multiplexer_ids.add(multiplexer_id)
 
     return sorted(multiplexer_ids)
+
+
+def validate_signal_bounds(minimum, maximum) -> None:
+    if (minimum is None) != (maximum is None):
+        raise DBCError("DBC cannot represent one-sided signal bounds; set or clear both.")
+    if minimum is not None and str(minimum) == str(maximum) == "0":
+        raise DBCError(
+            "DBC reserves integer 0|0 for absent bounds; use floating-point zero or clear both."
+        )

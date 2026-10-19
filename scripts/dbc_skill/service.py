@@ -10,7 +10,7 @@ from cantools.database.can.formats.dbc_specifics import DbcSpecifics
 from cantools.database.conversion import BaseConversion
 
 from .errors import DBCError
-from .values import parse_integer
+from .values import parse_integer, validate_signal_bounds
 
 
 def parse_frame_id(value: str | int) -> int:
@@ -550,6 +550,7 @@ class DBCService:
             and values["minimum"] > values["maximum"]
         ):
             raise DBCError("Signal minimum must not exceed maximum.")
+        validate_signal_bounds(values["minimum"], values["maximum"])
 
         for field in ("unit", "comment"):
             if values[field] is not None and not isinstance(values[field], str):

@@ -89,6 +89,45 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(backup.read_bytes(), original)
             self.assertEqual(result["backup"], str(backup))
 
+    def test_unrepresentable_signal_bounds_preserve_source(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            invalid_bounds = ((None, 100), (-10, None), (0, 0))
+            for index, (minimum, maximum) in enumerate(invalid_bounds):
+                with self.subTest(minimum=minimum, maximum=maximum):
+                    source = Path(temporary_directory) / f"bounds-{index}.dbc"
+                    save_database(
+                        cantools.database.Database(),
+                        source,
+                        None,
+                        "utf-8",
+                        backup=False,
+                    )
+                    original = source.read_bytes()
+                    db = cantools.database.Database()
+                    db.messages.append(
+                        cantools.database.can.Message(
+                            frame_id=0x123,
+                            name="Status",
+                            length=8,
+                            signals=[
+                                cantools.database.can.Signal(
+                                    name="State",
+                                    start=0,
+                                    length=8,
+                                    minimum=minimum,
+                                    maximum=maximum,
+                                )
+                            ],
+                        )
+                    )
+
+                    with self.assertRaises(DBCError) as raised:
+                        save_database(db, source, None, "utf-8", backup=True)
+
+                    self.assertIn("bound", str(raised.exception).lower())
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
 
 class NodeCommandTests(unittest.TestCase):
     def initialize(self, path):
@@ -918,6 +957,125 @@ class SignalCommandTests(unittest.TestCase):
             self.assertIsNone(result["backup"])
             self.assertEqual(source.read_bytes(), before_delete)
             self.assertEqual(load_database(output, "utf-8").messages[0].signals, [])
+
+    def test_one_sided_bound_changes_fail_and_preserve_source(self):
+        operations = (
+            ("update", "State", ("--clear-minimum",)),
+            ("update", "State", ("--clear-maximum",)),
+            ("add", "OnlyMaximum", ("--maximum", "100")),
+            ("add", "OnlyMinimum", ("--minimum", "-10")),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for index, (operation, name, options) in enumerate(operations):
+                with self.subTest(operation=operation, name=name, options=options):
+                    source = Path(temporary_directory) / f"bounds-{index}.dbc"
+                    self.save_fixture(source)
+                    code, out, err = run_cli(
+                        [
+                            "--json",
+                            "signal",
+                            "add",
+                            str(source),
+                            "Status",
+                            "State",
+                            "--start",
+                            "0",
+                            "--length",
+                            "8",
+                            "--minimum",
+                            "-10",
+                            "--maximum",
+                            "100",
+                            "--no-backup",
+                        ]
+                    )
+                    self.assertEqual(code, 0, err)
+                    original = source.read_bytes()
+                    command = [
+                        "--json",
+                        "signal",
+                        operation,
+                        str(source),
+                        "Status",
+                        name,
+                    ]
+                    if operation == "add":
+                        command.extend(("--start", "8", "--length", "8"))
+                    command.extend(options)
+
+                    code, out, err = run_cli(command)
+
+                    self.assertEqual(code, 1)
+                    payload = json.loads(out)
+                    self.assertFalse(payload["success"])
+                    self.assertIn("bound", payload["error"].lower())
+                    self.assertNotIn("Traceback", out)
+                    self.assertNotIn("Traceback", err)
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_absent_and_explicit_zero_bounds_survive_cli_reload(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "bounds.dbc"
+            self.save_fixture(source)
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "add",
+                    str(source),
+                    "Status",
+                    "State",
+                    "--start",
+                    "0",
+                    "--length",
+                    "8",
+                    "--minimum",
+                    "-10",
+                    "--maximum",
+                    "100",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "State",
+                    "--clear-minimum",
+                    "--clear-maximum",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            state = load_database(source, "utf-8").messages[0].signals[0]
+            self.assertIsNone(state.minimum)
+            self.assertIsNone(state.maximum)
+
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "signal",
+                    "update",
+                    str(source),
+                    "Status",
+                    "State",
+                    "--minimum",
+                    "0",
+                    "--maximum",
+                    "0",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            state = load_database(source, "utf-8").messages[0].signals[0]
+            self.assertEqual(state.minimum, 0.0)
+            self.assertEqual(state.maximum, 0.0)
 
     def test_multiplexer_commands_rename_clear_and_encode_decode(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
