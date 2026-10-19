@@ -97,6 +97,7 @@ class DocumentationContractTests(unittest.TestCase):
                 document,
                 (
                     "requirements.txt",
+                    "Python 3.9+",
                     "python3 scripts/dbc_crud.py",
                     "references/cli-reference.md",
                     "references/dbc-fields.md",
@@ -145,6 +146,7 @@ class DocumentationContractTests(unittest.TestCase):
             "--clear-comment",
             "--name",
             "--sender",
+            "--clear-senders",
             "--length",
             "--extended",
             "--fd",

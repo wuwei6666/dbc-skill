@@ -6,7 +6,7 @@
 
 ## 环境要求与安装
 
-- Python 3
+- Python 3.9+
 - `requirements.txt` 中固定的依赖（`cantools==40.7.1`）
 
 在仓库根目录执行：
@@ -44,7 +44,7 @@ python3 scripts/dbc_crud.py --json validate demo.dbc
 - `node`、`message` 和 `signal` 的新增、更新、删除操作都通过 cantools 保存。默认原地保存会创建包含原始字节的 `PATH.bak`；检查结果期间请保留该备份。
 - `--output OTHER.dbc` 写入独立文件并保持输入不变，是删除或实验性修改的优先选择。
 - `--no-backup` 会在原地保存时禁用 `.bak`。仅对临时文件或已有其他备份的文件使用。
-- 保存会规范化 DBC 文本，并不保证逐字节无损保留注释、格式或 cantools 未建模的构造。CLI 会先写临时文件、严格重新加载并检查多路复用元数据，然后替换目标文件。
+- 保存会规范化 DBC 文本，并不保证逐字节无损保留注释、格式或 cantools 未建模的构造。CLI 会先写临时文件、严格重新加载并检查所有受支持实体的元数据，然后替换目标文件。
 - 默认编码为 UTF-8。可用全局 `--encoding` 指定源文件和目标文件编码，例如兼容旧文件时使用 `cp936`。
 
 ## CAN 与 DBC 能力

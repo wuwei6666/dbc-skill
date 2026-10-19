@@ -5,12 +5,25 @@ import re
 
 import cantools
 from cantools.database.can import Database, Message, Node, Signal
-from cantools.database.can.formats.dbc import ATTRIBUTE_DEFINITION_VFRAMEFORMAT
+from cantools.database.can.formats.dbc import (
+    ATTRIBUTE_DEFINITION_VFRAMEFORMAT,
+    get_dbc_name,
+)
 from cantools.database.can.formats.dbc_specifics import DbcSpecifics
 from cantools.database.conversion import BaseConversion
 
 from .errors import DBCError
 from .values import parse_integer, validate_signal_bounds
+
+
+def _validate_dbc_name(name: str, entity_type: str) -> None:
+    if not isinstance(name, str) or not name:
+        raise DBCError(f"{entity_type} name must be a non-empty string.")
+    normalized = get_dbc_name(name)
+    if normalized != name:
+        raise DBCError(
+            f"{entity_type} name '{name}' would be rewritten by cantools as '{normalized}'."
+        )
 
 
 def parse_frame_id(value: str | int) -> int:
@@ -138,6 +151,7 @@ class DBCService:
         return self._node_to_dict(self._find_node(name))
 
     def add_node(self, name: str, comment: str | None) -> dict:
+        _validate_dbc_name(name, "Node")
         if any(node.name == name for node in self.db.nodes):
             raise DBCError(f"Node '{name}' already exists.")
 
@@ -154,6 +168,7 @@ class DBCService:
     ) -> dict:
         old = self._find_node(name)
         updated_name = new_name if new_name is not None else name
+        _validate_dbc_name(updated_name, "Node")
         if updated_name != name and any(
             node.name == updated_name for node in self.db.nodes
         ):
@@ -594,8 +609,7 @@ class DBCService:
         values: dict,
         old: Signal | None,
     ) -> dict:
-        if not isinstance(name, str) or not name:
-            raise DBCError("Signal name must be a non-empty string.")
+        _validate_dbc_name(name, "Signal")
         values["start"] = parse_integer(values["start"])
         values["length"] = parse_integer(values["length"])
         if values["start"] < 0:
@@ -825,8 +839,7 @@ class DBCService:
         fd: bool,
         cycle_time: int | None,
     ) -> list[str]:
-        if not isinstance(name, str) or not name:
-            raise DBCError("Message name must be a non-empty string.")
+        _validate_dbc_name(name, "Message")
         if not isinstance(extended, bool) or not isinstance(fd, bool):
             raise DBCError("Message frame type and CAN FD flags must be boolean.")
 

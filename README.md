@@ -6,7 +6,7 @@ A structured command-line skill for creating, inspecting, updating, deleting, va
 
 ## Requirements and setup
 
-- Python 3
+- Python 3.9+
 - The pinned dependency in `requirements.txt` (`cantools==40.7.1`)
 
 From the repository root:
@@ -44,7 +44,7 @@ Message references accept a name or a decimal/`0x` hexadecimal frame ID. Put glo
 - `node`, `message`, and `signal` add/update/delete operations save through cantools. An in-place save creates `PATH.bak` containing the original bytes by default; retain it while checking the result.
 - `--output OTHER.dbc` writes a separate file and leaves the input unchanged. This is the safest choice for destructive or experimental edits.
 - `--no-backup` disables the `.bak` copy for an in-place save. Use it only for disposable files or when another backup exists.
-- Saving normalizes DBC text. It is not byte-for-byte lossless preservation of comments, formatting, or constructs that cantools does not model. The CLI writes a temporary file, reloads it strictly, checks multiplexer metadata, and then replaces the destination.
+- Saving normalizes DBC text. It is not byte-for-byte lossless preservation of comments, formatting, or constructs that cantools does not model. The CLI writes a temporary file, reloads it strictly, checks all supported entity metadata, and then replaces the destination.
 - The default encoding is UTF-8. Use global `--encoding` with the encoding used by the source and destination, such as `cp936` for a compatible legacy file.
 
 ## CAN and DBC capabilities

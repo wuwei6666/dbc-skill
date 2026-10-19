@@ -35,6 +35,15 @@ def _signal_details(message: Message, signal: Signal) -> dict:
     }
 
 
+def _message_details(message: Message) -> dict:
+    details = DBCService._message_to_dict(message)
+    details["signals"] = sorted(
+        details["signals"],
+        key=lambda signal: (signal["start"], signal["name"], signal["length"]),
+    )
+    return details
+
+
 def _changes(left: dict, right: dict) -> dict:
     return {
         field: {"left": left[field], "right": right[field]}
@@ -70,11 +79,11 @@ def compare_databases(left: Database, right: Database) -> dict:
         node.name: DBCService._node_to_dict(node) for node in right.nodes
     }
     left_messages = {
-        _message_identity(message): DBCService._message_to_dict(message)
+        _message_identity(message): _message_details(message)
         for message in left.messages
     }
     right_messages = {
-        _message_identity(message): DBCService._message_to_dict(message)
+        _message_identity(message): _message_details(message)
         for message in right.messages
     }
     left_signals = {

@@ -525,6 +525,78 @@ class ComparisonCliTests(ComparisonTestCase):
         self.assertFalse(Path(str(left_path) + ".bak").exists())
         self.assertFalse(Path(str(right_path) + ".bak").exists())
 
+    def test_equal_start_branch_order_is_equal_and_text_deterministic(self):
+        left = self.make_service()
+        right = self.make_service()
+        for service in (left, right):
+            self.add_message(service)
+            service.add_signal(
+                "Status", "Mode", start=0, length=8, is_multiplexer=True
+            )
+        left.add_signal(
+            "Status",
+            "Speed",
+            start=8,
+            length=16,
+            multiplexer_signal="Mode",
+            multiplexer_ids=[0],
+        )
+        left.add_signal(
+            "Status",
+            "Rpm",
+            start=8,
+            length=16,
+            multiplexer_signal="Mode",
+            multiplexer_ids=[1],
+        )
+        right.add_signal(
+            "Status",
+            "Rpm",
+            start=8,
+            length=16,
+            multiplexer_signal="Mode",
+            multiplexer_ids=[1],
+        )
+        right.add_signal(
+            "Status",
+            "Speed",
+            start=8,
+            length=16,
+            multiplexer_signal="Mode",
+            multiplexer_ids=[0],
+        )
+        left_path, right_path = self.write_pair(left, right)
+        left_names = [
+            signal.name for signal in load_database(left_path, "utf-8").messages[0].signals
+        ]
+        right_names = [
+            signal.name
+            for signal in load_database(right_path, "utf-8").messages[0].signals
+        ]
+        self.assertNotEqual(left_names, right_names)
+
+        code, out, err = run_cli(
+            ["--json", "compare", str(left_path), str(right_path)]
+        )
+
+        self.assertEqual(code, 0, err)
+        result = json.loads(out)["result"]
+        self.assertTrue(result["equal"])
+        self.assertEqual(
+            result["counts"],
+            {"added": 0, "removed": 0, "modified": 0, "unchanged": 4},
+        )
+        self.assertEqual(result["messages"]["modified"], [])
+        self.assertEqual(len(result["signals"]["unchanged"]), 3)
+
+        first = run_cli(["compare", str(left_path), str(right_path)])
+        second = run_cli(["compare", str(left_path), str(right_path)])
+
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], 0)
+        self.assertEqual(first[2], "")
+        self.assertIn("Equal: yes", first[1])
+
     def test_load_errors_are_nonzero_and_traceback_free(self):
         left = self.make_service()
         right = self.make_service()

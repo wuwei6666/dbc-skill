@@ -173,7 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     message_update_parser.add_argument("--new-id")
     message_update_parser.add_argument("--new-name")
     message_update_parser.add_argument("--length", type=int)
-    message_update_parser.add_argument("--sender", dest="senders", action="append")
+    sender_group = message_update_parser.add_mutually_exclusive_group()
+    sender_group.add_argument("--sender", dest="senders", action="append")
+    sender_group.add_argument("--clear-senders", action="store_true")
     frame_type_group = message_update_parser.add_mutually_exclusive_group()
     frame_type_group.add_argument("--extended", dest="extended", action="store_true")
     frame_type_group.add_argument("--standard", dest="extended", action="store_false")
@@ -318,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
                         changes["name"] = args.new_name
                     if args.length is not None:
                         changes["length"] = args.length
-                    if args.senders is not None:
+                    if args.clear_senders:
+                        changes["senders"] = []
+                    elif args.senders is not None:
                         changes["senders"] = args.senders
                     if args.extended is not None:
                         changes["extended"] = args.extended

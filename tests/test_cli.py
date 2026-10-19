@@ -89,6 +89,61 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(backup.read_bytes(), original)
             self.assertEqual(result["backup"], str(backup))
 
+    def test_in_place_save_preserves_destination_mode(self):
+        import stat
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "original.dbc"
+            source.write_bytes(cantools.database.Database().as_dbc_string().encode())
+            source.chmod(0o644)
+            db = load_database(source, "utf-8")
+
+            save_database(db, source, None, "utf-8", backup=False)
+
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o644)
+
+    def test_relative_and_absolute_aliases_create_in_place_backup(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "alias.dbc"
+            original = cantools.database.Database().as_dbc_string().encode("utf-8")
+            source.write_bytes(original)
+            db = load_database(source, "utf-8")
+            previous_directory = os.getcwd()
+            try:
+                os.chdir(root)
+                result = save_database(
+                    db, Path("alias.dbc"), source, "utf-8", backup=True
+                )
+            finally:
+                os.chdir(previous_directory)
+
+            backup = root / "alias.dbc.bak"
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(result["backup"], "alias.dbc.bak")
+
+    def test_existing_hardlink_alias_creates_in_place_backup(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source.dbc"
+            alias = root / "alias.dbc"
+            original = cantools.database.Database().as_dbc_string().encode("utf-8")
+            source.write_bytes(original)
+            os.link(source, alias)
+            db = load_database(source, "utf-8")
+
+            result = save_database(db, source, alias, "utf-8", backup=True)
+
+            backup = Path(str(source) + ".bak")
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(result["backup"], str(backup))
+
     def test_unrepresentable_signal_bounds_preserve_source(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             invalid_bounds = ((None, 100), (-10, None), (0, 0))
@@ -242,6 +297,260 @@ class StorageTests(unittest.TestCase):
                     self.assertEqual(reloaded.nodes[0].comment, comment)
                     self.assertEqual(reloaded.messages[0].comment, comment)
                     self.assertEqual(reloaded.messages[0].signals[0].comment, comment)
+
+    def test_reload_changing_supported_entity_fields_preserves_source(self):
+        from scripts.dbc_skill.service import DBCService
+
+        mutators = {
+            "node name": lambda db: setattr(db.nodes[0], "name", "Changed"),
+            "node comment": lambda db: db.nodes[0].comments.__setitem__(
+                None, "Changed"
+            ),
+            "message frame ID": lambda db: setattr(
+                db.messages[0], "frame_id", 0x124
+            ),
+            "message name": lambda db: setattr(db.messages[0], "name", "Changed"),
+            "message length": lambda db: setattr(db.messages[0], "length", 7),
+            "message senders": lambda db: db.messages[0].senders.clear(),
+            "message frame type": lambda db: setattr(
+                db.messages[0], "is_extended_frame", True
+            ),
+            "message FD": lambda db: setattr(db.messages[0], "is_fd", True),
+            "message cycle time": lambda db: setattr(
+                db.messages[0], "cycle_time", 200
+            ),
+            "message comment": lambda db: setattr(
+                db.messages[0], "comment", "Changed"
+            ),
+            "signal name": lambda db: setattr(
+                db.messages[0].signals[0], "name", "Changed"
+            ),
+            "signal start": lambda db: setattr(db.messages[0].signals[0], "start", 15),
+            "signal length": lambda db: setattr(
+                db.messages[0].signals[0], "length", 8
+            ),
+            "signal byte order": lambda db: setattr(
+                db.messages[0].signals[0], "byte_order", "little_endian"
+            ),
+            "signal signedness": lambda db: setattr(
+                db.messages[0].signals[0], "is_signed", False
+            ),
+            "signal factor": lambda db: setattr(db.messages[0].signals[0], "scale", 1.5),
+            "signal offset": lambda db: setattr(db.messages[0].signals[0], "offset", 1),
+            "signal minimum": lambda db: setattr(
+                db.messages[0].signals[0], "minimum", 0.5
+            ),
+            "signal maximum": lambda db: setattr(
+                db.messages[0].signals[0], "maximum", 4.5
+            ),
+            "signal unit": lambda db: setattr(db.messages[0].signals[0], "unit", "A"),
+            "signal receivers": lambda db: setattr(
+                db.messages[0].signals[0], "receivers", []
+            ),
+            "signal choices": lambda db: setattr(
+                db.messages[0].signals[0], "choices", None
+            ),
+            "signal comment": lambda db: setattr(
+                db.messages[0].signals[0], "comment", "Changed"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for field, mutate in mutators.items():
+                with self.subTest(field=field):
+                    service = DBCService(cantools.database.Database())
+                    service.add_node("ECU_A", "Node comment")
+                    service.add_message(
+                        0x123,
+                        "Status",
+                        8,
+                        ["ECU_A"],
+                        False,
+                        False,
+                        100,
+                        "Message comment",
+                    )
+                    service.add_signal(
+                        "Status",
+                        "State",
+                        start=7,
+                        length=16,
+                        byte_order="big_endian",
+                        is_signed=True,
+                        factor=0.5,
+                        offset=-1,
+                        minimum=-1,
+                        maximum=3.5,
+                        unit="V",
+                        receivers=["ECU_A"],
+                        choices={0: "Off", 1: "On"},
+                        comment="Signal comment",
+                    )
+                    source = Path(temporary_directory) / f"{field}.dbc"
+                    save_database(service.db, source, None, "utf-8", backup=False)
+                    original = source.read_bytes()
+                    real_load_file = cantools.database.load_file
+
+                    def load_and_change(path, **kwargs):
+                        reloaded = real_load_file(path, **kwargs)
+                        mutate(reloaded)
+                        return reloaded
+
+                    with mock.patch(
+                        "scripts.dbc_skill.storage.cantools.database.load_file",
+                        side_effect=load_and_change,
+                    ):
+                        with self.assertRaises(DBCError) as raised:
+                            save_database(service.db, source, None, "utf-8", backup=True)
+
+                    self.assertIn("Supported DBC metadata", str(raised.exception))
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertFalse(Path(str(source) + ".bak").exists())
+
+
+class NameValidationCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.root = Path(self.temporary_directory.name)
+
+    def run_ok(self, command):
+        code, out, err = run_cli(["--json"] + command)
+        self.assertEqual(code, 0, out + err)
+
+    def assert_name_rejected(self, command, source, original):
+        code, out, err = run_cli(["--json"] + command)
+
+        self.assertEqual(code, 1, out + err)
+        payload = json.loads(out)
+        self.assertFalse(payload["success"])
+        self.assertIn("rewritten by cantools", payload["error"])
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertFalse(Path(str(source) + ".bak").exists())
+
+    def test_node_names_cantools_rewrites_are_rejected(self):
+        for operation in ("add", "update"):
+            with self.subTest(operation=operation):
+                source = self.root / f"node-{operation}.dbc"
+                self.run_ok(["init", str(source)])
+                if operation == "update":
+                    self.run_ok(["node", "add", str(source), "ECU_A", "--no-backup"])
+                original = source.read_bytes()
+                command = (
+                    ["node", "add", str(source), "ECU A"]
+                    if operation == "add"
+                    else [
+                        "node",
+                        "update",
+                        str(source),
+                        "ECU_A",
+                        "--new-name",
+                        "ECU A",
+                    ]
+                )
+
+                self.assert_name_rejected(command, source, original)
+
+    def test_message_names_cantools_rewrites_are_rejected(self):
+        for operation in ("add", "update"):
+            with self.subTest(operation=operation):
+                source = self.root / f"message-{operation}.dbc"
+                self.run_ok(["init", str(source)])
+                if operation == "update":
+                    self.run_ok(
+                        [
+                            "message",
+                            "add",
+                            str(source),
+                            "0x123",
+                            "Status",
+                            "--length",
+                            "8",
+                            "--no-backup",
+                        ]
+                    )
+                original = source.read_bytes()
+                command = (
+                    [
+                        "message",
+                        "add",
+                        str(source),
+                        "0x123",
+                        "Status-Message",
+                        "--length",
+                        "8",
+                    ]
+                    if operation == "add"
+                    else [
+                        "message",
+                        "update",
+                        str(source),
+                        "Status",
+                        "--new-name",
+                        "Status-Message",
+                    ]
+                )
+
+                self.assert_name_rejected(command, source, original)
+
+    def test_signal_names_cantools_rewrites_are_rejected(self):
+        for operation in ("add", "update"):
+            with self.subTest(operation=operation):
+                source = self.root / f"signal-{operation}.dbc"
+                self.run_ok(["init", str(source)])
+                self.run_ok(
+                    [
+                        "message",
+                        "add",
+                        str(source),
+                        "0x123",
+                        "Status",
+                        "--length",
+                        "8",
+                        "--no-backup",
+                    ]
+                )
+                if operation == "update":
+                    self.run_ok(
+                        [
+                            "signal",
+                            "add",
+                            str(source),
+                            "Status",
+                            "State",
+                            "--start",
+                            "0",
+                            "--length",
+                            "8",
+                            "--no-backup",
+                        ]
+                    )
+                original = source.read_bytes()
+                command = (
+                    [
+                        "signal",
+                        "add",
+                        str(source),
+                        "Status",
+                        "State-Name",
+                        "--start",
+                        "8",
+                        "--length",
+                        "8",
+                    ]
+                    if operation == "add"
+                    else [
+                        "signal",
+                        "update",
+                        str(source),
+                        "Status",
+                        "State",
+                        "--new-name",
+                        "State-Name",
+                    ]
+                )
+
+                self.assert_name_rejected(command, source, original)
 
 
 class NodeCommandTests(unittest.TestCase):
@@ -658,6 +967,85 @@ class MessageCommandTests(unittest.TestCase):
             self.assertIsNone(reloaded.comment)
             self.assertFalse(reloaded.is_extended_frame)
             self.assertFalse(reloaded.is_fd)
+
+    def test_message_update_clear_senders_and_save_reload(self):
+        import subprocess
+        import sys
+
+        script = Path(__file__).resolve().parents[1] / "scripts/dbc_crud.py"
+
+        def run_external(arguments):
+            return subprocess.run(
+                [sys.executable, str(script), "--json"] + arguments,
+                text=True,
+                capture_output=True,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "messages.dbc"
+            self.initialize(source)
+            code, out, err = run_cli(
+                [
+                    "--json",
+                    "message",
+                    "add",
+                    str(source),
+                    "0x123",
+                    "Status",
+                    "--length",
+                    "8",
+                    "--sender",
+                    "ECU_A",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(code, 0, out + err)
+
+            completed = run_external(
+                [
+                    "message",
+                    "update",
+                    str(source),
+                    "Status",
+                    "--clear-senders",
+                    "--no-backup",
+                ]
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["result"]["senders"], [])
+            self.assertEqual(load_database(source, "utf-8").messages[0].senders, [])
+
+            completed = run_external(
+                [
+                    "message",
+                    "update",
+                    str(source),
+                    "Status",
+                    "--sender",
+                    "ECU_B",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertEqual(load_database(source, "utf-8").messages[0].senders, ["ECU_B"])
+
+            original = source.read_bytes()
+            completed = run_external(
+                [
+                    "message",
+                    "update",
+                    str(source),
+                    "Status",
+                    "--sender",
+                    "ECU_A",
+                    "--clear-senders",
+                    "--no-backup",
+                ]
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertNotIn("Traceback", completed.stdout + completed.stderr)
+            self.assertEqual(source.read_bytes(), original)
 
     def test_message_delete_to_separate_output_reports_signal_count(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

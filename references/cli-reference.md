@@ -17,6 +17,8 @@ python3 scripts/dbc_crud.py [--json] [--encoding ENCODING] COMMAND ...
 
 `PATH`, `LEFT`, and `RIGHT` are file paths. `NAME` is an entity name. `REFERENCE` and `MESSAGE_REF` accept a message name, decimal frame ID, or `0x` hexadecimal frame ID. `FRAME_ID` and `--new-id` accept decimal or `0x` hexadecimal integers.
 
+Node, message, and signal names that cantools would rewrite, such as `ECU A` or `Status-Message`, are rejected instead of being silently normalized.
+
 Successful JSON has `success`, `operation`, and `result`; expected failures have `success`, `operation`, and `error`. See [DBC fields](dbc-fields.md) for every result key.
 
 ### Mutation destination and backups
@@ -25,10 +27,10 @@ The entity `add`, `update`, and `delete` commands accept:
 
 | Option | Meaning |
 |---|---|
-| `--output OTHER.dbc` | Write to another path. When it differs from `PATH`, the input is unchanged and no `.bak` is created for it. |
+| `--output OTHER.dbc` | Write to another path. A distinct destination leaves the input unchanged and has no `.bak`; an existing distinct destination is replaced without its own backup. If `OTHER.dbc` resolves to the same file as `PATH`, the operation is treated as in-place for backup purposes. |
 | `--no-backup` | For an in-place mutation, do not create `PATH.bak`. |
 
-Without `--output`, these commands replace `PATH` and create `PATH.bak` by default when the source exists. The backup contains the original bytes. Saving still normalizes the destination through cantools; it is not byte-for-byte lossless. `init`, `summary`, `validate`, `compare`, `list`, and `show` do not accept mutation options.
+Without `--output`, these commands replace `PATH` and create `PATH.bak` by default when the source exists. The backup contains the original bytes. Existing destination permission modes are preserved. Saving still normalizes the destination through cantools; it is not byte-for-byte lossless. `init`, `summary`, `validate`, `compare`, `list`, and `show` do not accept mutation options.
 
 ## File and database commands
 
@@ -38,7 +40,7 @@ Without `--output`, these commands replace `PATH` and create `PATH.bak` by defau
 python3 scripts/dbc_crud.py init PATH
 ```
 
-Creates parent directories as needed. `init` writes an empty database; it has no `--output` or `--no-backup` option.
+Creates parent directories as needed. `init` writes an empty database; it has no `--output` or `--no-backup` option. If `PATH` already exists, `init` replaces it and creates `PATH.bak` containing the previous bytes; otherwise no backup is created.
 
 ### Summarize a database
 
@@ -142,11 +144,11 @@ Frame IDs and names must each be unique.
 ### Update a message
 
 ```bash
-python3 scripts/dbc_crud.py message update PATH REFERENCE [--new-id FRAME_ID] [--new-name NAME] [--length BYTES] [--sender NODE] [--extended | --standard] [--fd | --classic] [--cycle-time MS | --clear-cycle-time] [--comment TEXT | --clear-comment] [--output OTHER.dbc] [--no-backup]
+python3 scripts/dbc_crud.py message update PATH REFERENCE [--new-id FRAME_ID] [--new-name NAME] [--length BYTES] [--sender NODE | --clear-senders] [--extended | --standard] [--fd | --classic] [--cycle-time MS | --clear-cycle-time] [--comment TEXT | --clear-comment] [--output OTHER.dbc] [--no-backup]
 ```
 
 - `--new-id` and `--new-name` change identity fields; duplicates are rejected.
-- Repeated `--sender` replaces the sender list with the supplied values. Omitting it preserves the current list.
+- Repeated `--sender` replaces the sender list with the supplied values. `--clear-senders` replaces it with an empty list; the two options are mutually exclusive. Omitting both preserves the current list.
 - `--extended` / `--standard` select the frame type; `--fd` / `--classic` select CAN FD or Classic CAN.
 - `--cycle-time` sets a nonnegative integer; `--clear-cycle-time` sets null.
 - `--comment` replaces the comment; `--clear-comment` sets null.
@@ -251,7 +253,7 @@ python3 scripts/dbc_crud.py signal add file.dbc Status SubMode --start 8 --lengt
 python3 scripts/dbc_crud.py signal add file.dbc Status Payload --start 16 --length 16 --multiplexer-of SubMode --multiplexer-values 2-4
 ```
 
-Nested and multi-value/range relationships are serialized through DBC `SG_MUL_VAL_` where required. Save reloads the temporary file and compares multiplexer metadata before replacement. This targeted check does not claim lossless preservation of unrelated formatting or unsupported DBC constructs.
+Nested and multi-value/range relationships are serialized through DBC `SG_MUL_VAL_` where required. Save reloads the temporary file and compares every supported entity identity and field, including multiplexer metadata, before replacement. These checks do not claim lossless preservation of unrelated formatting or unsupported DBC constructs.
 
 ## Comparison identity and JSON
 

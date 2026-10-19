@@ -137,7 +137,7 @@ Validation rules:
 
 `--multiplexer-values` uses comma-separated values and inclusive ranges, such as `1,2`, `2-4`, or the mixed decimal/hexadecimal form `0,2-4,0xA`. See the [CLI multiplexing examples](cli-reference.md#standard-and-extended-multiplexing).
 
-Nested and multi-value/range relationships use DBC `SG_MUL_VAL_` records where required. Before replacing a destination, the save path reloads the temporary DBC and compares each signal's selector role, parent, and sorted IDs with the in-memory values. A mismatch rejects the save. This protects multiplexer metadata; it is not a guarantee of byte-for-byte or arbitrary DBC construct preservation.
+Nested and multi-value/range relationships use DBC `SG_MUL_VAL_` records where required. Before replacing a destination, the save path reloads the temporary DBC and compares every supported node, message, and signal identity and field, including each signal's selector role, parent, and sorted IDs, with the in-memory values. A mismatch rejects the save. This protects supported metadata; it is not a guarantee of byte-for-byte or arbitrary DBC construct preservation.
 
 ## Mutation result fields
 
@@ -148,9 +148,9 @@ Successful entity mutations, and `init`, add these fields to the entity result (
 | `output` | string | Destination path actually written. |
 | `backup` | string or null | Backup path, or null when no backup was made. |
 
-For an in-place entity mutation with backups enabled, `backup` is `PATH.bak` and contains the source bytes from immediately before that save. A later in-place save replaces the previous `.bak`; copy backups elsewhere if multiple recovery points are needed. With `--output` to a different path, the input is not modified and `backup` is null. With `--no-backup`, `backup` is also null.
+For an in-place entity mutation with backups enabled, including a path alias that resolves to the source file, `backup` is `PATH.bak` and contains the source bytes from immediately before that save. A later in-place save replaces the previous `.bak`; copy backups elsewhere if multiple recovery points are needed. With `--output` to a distinct path, the input is not modified and `backup` is null; an existing distinct destination is replaced without its own backup. With `--no-backup`, `backup` is also null.
 
-Saving serializes to a temporary file in the destination directory, strictly reloads it, checks multiplexer metadata, and then replaces the destination. cantools normalizes DBC text, so formatting and unsupported constructs are not promised to survive. The global `--encoding` controls both loading and saving; during `compare`, the same selected encoding is used for both inputs.
+Saving serializes to a temporary file in the destination directory, strictly reloads it, checks all supported entity metadata, preserves an existing destination's permission mode, and then replaces the destination. cantools normalizes DBC text, so formatting and unsupported constructs are not promised to survive. The global `--encoding` controls both loading and saving; during `compare`, the same selected encoding is used for both inputs.
 
 ## Comparison result fields
 
