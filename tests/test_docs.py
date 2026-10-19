@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,24 @@ class DocumentationContractTests(unittest.TestCase):
         for fragment in fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
+
+    def test_example_dbc_introduces_no_whitespace_errors(self):
+        completed = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--no-index",
+                "--check",
+                "/dev/null",
+                str(ROOT / "examples/example.dbc"),
+            ],
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(completed.stderr, "")
 
     def test_skill_frontmatter_has_discovery_triggers(self):
         skill = read_document("SKILL.md")
