@@ -49,7 +49,7 @@ class DocumentationContractTests(unittest.TestCase):
         description = description_match.group(1)
         self.assertTrue(description.startswith("Use when "))
         self.assert_contains_all(
-            description, ("DBC", "CAN", "CRUD", "comparison", "multiplexing")
+            description, ("DBC", "CAN", "CRUD", "comparison", "multiplexing", "Excel")
         )
 
     def test_skill_has_bilingual_prompts_and_safe_cli_guidance(self):
@@ -130,6 +130,8 @@ class DocumentationContractTests(unittest.TestCase):
             "signal add PATH MESSAGE_REF NAME",
             "signal update PATH MESSAGE_REF NAME",
             "signal delete PATH MESSAGE_REF NAME",
+            "excel export INPUT.dbc OUTPUT.xlsx",
+            "excel import INPUT.xlsx OUTPUT.dbc",
         )
 
         self.assert_contains_all(reference, operations)
@@ -309,6 +311,148 @@ class DocumentationContractTests(unittest.TestCase):
                     "--multiplexer-values 4-5",
                 ),
             )
+
+    def test_excel_conversion_is_discoverable_with_pinned_dependencies(self):
+        skill = read_document("SKILL.md")
+        english = read_document("README.md")
+        chinese = read_document("README.zh-CN.md")
+
+        self.assert_contains_all(
+            skill,
+            (
+                "excel export INPUT.dbc OUTPUT.xlsx",
+                "excel import INPUT.xlsx OUTPUT.dbc",
+                "导出为 Excel",
+                "从 Excel 导入",
+            ),
+        )
+        for document in (english, chinese):
+            self.assert_contains_all(
+                document,
+                (
+                    "excel export INPUT.dbc OUTPUT.xlsx",
+                    "excel import INPUT.xlsx OUTPUT.dbc",
+                    "cantools==40.7.1",
+                    "openpyxl==3.1.5",
+                ),
+            )
+
+    def test_cli_reference_covers_excel_conversion_behavior(self):
+        reference = read_document("references/cli-reference.md")
+
+        self.assert_contains_all(
+            reference,
+            (
+                "excel export INPUT.dbc OUTPUT.xlsx",
+                "excel import INPUT.xlsx OUTPUT.dbc",
+                ".xlsx",
+                "formula",
+                "backup",
+                "warnings",
+                "compare",
+            ),
+        )
+
+    def test_workbook_schema_lists_five_sheets_and_every_column(self):
+        reference = read_document("references/cli-reference.md")
+
+        self.assert_contains_all(
+            reference,
+            (
+                "Metadata",
+                "Nodes",
+                "Messages",
+                "Signals",
+                "Choices",
+                "format",
+                "schema_version",
+                "generator",
+                "dbc_version",
+                "key",
+                "value",
+                "name",
+                "comment",
+                "frame_id",
+                "is_extended_frame",
+                "length",
+                "senders",
+                "is_fd",
+                "cycle_time",
+                "message_frame_id",
+                "message_is_extended_frame",
+                "start",
+                "byte_order",
+                "is_signed",
+                "factor",
+                "offset",
+                "minimum",
+                "maximum",
+                "unit",
+                "receivers",
+                "is_multiplexer",
+                "multiplexer_signal",
+                "multiplexer_ids",
+                "signal_name",
+                "raw_value",
+                "label",
+            ),
+        )
+
+    def test_excel_cell_syntax_is_explicit(self):
+        reference = read_document("references/cli-reference.md")
+
+        self.assert_contains_all(
+            reference,
+            (
+                "TRUE/FALSE",
+                "little_endian",
+                "big_endian",
+                "0x",
+                "1,2",
+                "2-4",
+                "comma-separated",
+                "inclusive",
+                "yes/no",
+                "1/0",
+            ),
+        )
+
+    def test_excel_result_fields_and_import_backup_are_documented(self):
+        fields = read_document("references/dbc-fields.md")
+
+        self.assert_contains_all(
+            fields,
+            (
+                "excel export",
+                "excel import",
+                "format",
+                "schema_version",
+                "warnings",
+                "input",
+                "node_count",
+                "message_count",
+                "signal_count",
+                "`backup` is always `null` for `excel import`",
+            ),
+        )
+
+    def test_bilingual_workflows_cover_excel_round_trip(self):
+        english = read_document("examples/workflow.md")
+        chinese = read_document("examples/workflow.zh-CN.md")
+
+        for document in (english, chinese):
+            self.assert_contains_all(
+                document,
+                (
+                    "excel export",
+                    "excel import",
+                    ".xlsx",
+                    "compare",
+                    "validate",
+                ),
+            )
+            self.assertLess(document.index("excel export"), document.index("excel import"))
+            self.assertLess(document.index("excel import"), document.rindex("compare"))
 
     def test_license_is_mit(self):
         license_text = read_document("LICENSE")

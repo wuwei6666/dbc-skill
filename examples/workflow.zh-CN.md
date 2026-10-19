@@ -4,7 +4,7 @@
 
 请在仓库根目录运行，并先激活虚拟环境。脚本会把 `examples/example.dbc` 复制到临时目录。每次修改都使用 `--output` 写入新文件，因此在清理临时目录之前，原始输入和所有中间阶段都保持不变。
 
-本示例会添加节点和一个标准多路复用报文，修改信号比例，更新并临时扩展现有的嵌套多路复用树，安全删除无依赖实体，将结果与原始文件比较，最后检查并验证文件。
+本示例会添加节点和一个标准多路复用报文，修改信号比例，更新并临时扩展现有的嵌套多路复用树，安全删除无依赖实体，将结果与原始文件比较，验证最终文件，并通过 Excel 完成一次语义往返验证。
 
 ```bash
 set -euo pipefail
@@ -54,6 +54,14 @@ edit signal delete "$CURRENT" Status ExtendedPayload
 "${CLI[@]}" compare "$ORIGINAL" "$CURRENT"
 "${CLI[@]}" validate "$CURRENT"
 "${CLI[@]}" summary "$CURRENT"
+
+# Excel 往返：导出、导入，然后做语义比较。
+WORKBOOK="$WORKDIR/roundtrip.xlsx"
+ROUNDTRIP="$WORKDIR/roundtrip.dbc"
+"${CLI[@]}" excel export "$CURRENT" "$WORKBOOK"
+"${CLI[@]}" excel import "$WORKBOOK" "$ROUNDTRIP"
+"${CLI[@]}" compare "$CURRENT" "$ROUNDTRIP"
+"${CLI[@]}" validate "$ROUNDTRIP"
 ```
 
-最终摘要为 `node_count: 1`、`message_count: 2`、`signal_count: 7`。虽然比较结果的 `result.equal` 为 `false`，但有效比较仍返回退出码 0；差异属于结果数据，不是 CLI 错误。
+最终摘要为 `node_count: 1`、`message_count: 2`、`signal_count: 7`。虽然比较结果的 `result.equal` 为 `false`，但有效比较仍返回退出码 0；差异属于结果数据，不是 CLI 错误。Excel 往返在语义上无损：比较修改后的 DBC 与重新导入的 DBC 会得到 `result.equal: true`，且导入结果中的 `backup` 为 `null`，因为转换会原子替换目标文件而不创建 `.bak` 备份。

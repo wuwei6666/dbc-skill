@@ -4,7 +4,7 @@
 
 Run from the repository root with the virtual environment activated. The script copies `examples/example.dbc` into a temporary directory. Every mutation uses `--output`, so the original input and every intermediate stage remain unchanged until the temporary directory is removed.
 
-The example adds a node and a standard-multiplexed message, edits a signal scale, updates and temporarily extends the existing nested multiplexing, safely deletes unreferenced entities, compares the result with the original, and validates the final file.
+The example adds a node and a standard-multiplexed message, edits a signal scale, updates and temporarily extends the existing nested multiplexing, safely deletes unreferenced entities, compares the result with the original, validates the final file, and verifies a semantic round trip through Excel.
 
 ```bash
 set -euo pipefail
@@ -54,6 +54,14 @@ edit signal delete "$CURRENT" Status ExtendedPayload
 "${CLI[@]}" compare "$ORIGINAL" "$CURRENT"
 "${CLI[@]}" validate "$CURRENT"
 "${CLI[@]}" summary "$CURRENT"
+
+# Round-trip through Excel: export, import, then compare semantically.
+WORKBOOK="$WORKDIR/roundtrip.xlsx"
+ROUNDTRIP="$WORKDIR/roundtrip.dbc"
+"${CLI[@]}" excel export "$CURRENT" "$WORKBOOK"
+"${CLI[@]}" excel import "$WORKBOOK" "$ROUNDTRIP"
+"${CLI[@]}" compare "$CURRENT" "$ROUNDTRIP"
+"${CLI[@]}" validate "$ROUNDTRIP"
 ```
 
-The final summary has `node_count: 1`, `message_count: 2`, and `signal_count: 7`. Comparison returns exit code 0 even though `result.equal` is `false`; differences are data, not a CLI failure.
+The final summary has `node_count: 1`, `message_count: 2`, and `signal_count: 7`. Comparison returns exit code 0 even though `result.equal` is `false`; differences are data, not a CLI failure. The Excel round trip is semantically lossless: comparing the edited DBC with the re-imported one reports `result.equal: true`, and the import result returns `backup: null` because conversion replaces the destination atomically without a `.bak` copy.

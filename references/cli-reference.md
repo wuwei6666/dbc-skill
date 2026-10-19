@@ -2,7 +2,7 @@
 
 [English README](../README.md) · [中文 README](../README.zh-CN.md) · [DBC field reference](dbc-fields.md)
 
-Run every command from the repository root. The CLI uses `cantools==40.7.1`; it does not accept direct DBC snippets on standard input.
+Run every command from the repository root. The CLI uses `cantools==40.7.1` and `openpyxl==3.1.5`; it does not accept direct DBC snippets on standard input.
 
 ## Invocation, identifiers, and output
 
@@ -65,6 +65,81 @@ python3 scripts/dbc_crud.py compare LEFT RIGHT
 ```
 
 Read-only: neither input is normalized, replaced, or backed up. See [Comparison identity and JSON](#comparison-identity-and-json) below.
+
+## Excel conversion
+
+`excel` converts between a DBC database and an Excel workbook. Both subcommands are covered by the global `--json` envelope; `--encoding` controls DBC loading (export) and DBC saving (import), never the workbook itself.
+
+### Export a database to Excel
+
+```bash
+python3 scripts/dbc_crud.py excel export INPUT.dbc OUTPUT.xlsx
+```
+
+Loads `INPUT.dbc` strictly and writes the five-sheet workbook described below to `OUTPUT.xlsx`. The workbook is first written to a temporary file in the destination directory, reloaded to verify its sheet structure, and then moved into place atomically. An existing `OUTPUT.xlsx` is replaced without a backup, preserving its permission mode. Boolean and `byte_order` columns carry dropdown validation to guide manual edits.
+
+### Import a database from Excel
+
+```bash
+python3 scripts/dbc_crud.py excel import INPUT.xlsx OUTPUT.dbc
+```
+
+- The input must use the `.xlsx` extension (case-insensitive); legacy `.xls` workbooks are rejected before reading.
+- The entire workbook is validated before anything is written — headers, cell types, cross-sheet references, signal bounds, and multiplexer rules — so a failed import never modifies `OUTPUT.dbc`. All problems are reported together as `Sheet '<name>' row <n> field '<field>': <detail>` lines and the command exits 1.
+- The database is rebuilt through the same service as the CRUD commands, so every rule in [DBC fields](dbc-fields.md) applies, including bound representability and multiplexer validation.
+- A successful import replaces an existing `OUTPUT.dbc` atomically without creating a `.bak` copy: `backup` is always `null` in the result.
+- Sheets other than the five documented sheets are ignored, and their names are reported in `result.warnings`.
+
+### Formula safety
+
+Formulas are not allowed in structured cells: any data row containing a formula fails the import with "formulas are not allowed in structured cells". Before importing a workbook that was computed in Excel, copy the edited region and use Paste Special → Values (or paste as values in your spreadsheet application) so every structured cell holds a literal.
+
+### Workbook schema
+
+A workbook has exactly five sheets in this order: `Metadata`, `Nodes`, `Messages`, `Signals`, `Choices`. Row 1 holds the headers; columns may be reordered, but every documented header must be present exactly once, headers must be nonempty text, and unknown columns are rejected. Fully blank rows are skipped.
+
+`Metadata` columns: `key`, `value`.
+
+| Key | Meaning |
+|---|---|
+| `format` | Required; must be `dbc-skill-excel`. |
+| `schema_version` | Required; must be `1`. |
+| `generator` | Written by export (`dbc-skill/dbc_crud.py`); ignored on import. |
+| `dbc_version` | Optional DBC version string, written by export when present. |
+| `node_count`, `message_count`, `signal_count` | Entity counts written by export; ignored on import. |
+
+Duplicate metadata keys are rejected; unlisted extra keys are ignored.
+
+`Nodes` columns: `name` (required, unique), `comment` (optional).
+
+`Messages` columns: `frame_id`, `is_extended_frame`, `name` (required, unique), `length` (required), `senders`, `is_fd`, `cycle_time`, `comment`.
+
+`Signals` columns: `message_frame_id`, `message_is_extended_frame`, `name` (required), `start` (required), `length` (required), `byte_order`, `is_signed`, `factor`, `offset`, `minimum`, `maximum`, `unit`, `receivers`, `comment`, `is_multiplexer`, `multiplexer_signal`, `multiplexer_ids`. A signal's parent message is identified by `(message_frame_id, message_is_extended_frame)`, matching comparison identity.
+
+`Choices` columns: `message_frame_id`, `message_is_extended_frame`, `signal_name`, `raw_value`, `label`. A Choices row belongs to the signal named `signal_name` inside the message identified by `(message_frame_id, message_is_extended_frame)`; the parent signal must exist. `raw_value` is a decimal or `0x` hexadecimal integer, unique per signal; `label` is required text.
+
+### Cell syntax and defaults
+
+- **Frame IDs** (`frame_id`, `message_frame_id`): decimal or `0x` hexadecimal. Export writes uppercase `0x` hexadecimal text.
+- **Booleans** (`is_extended_frame`, `message_is_extended_frame`, `is_fd`, `is_signed`, `is_multiplexer`): `TRUE/FALSE`, `yes/no`, or `1/0`, case-insensitive; blank means `FALSE`.
+- **`byte_order`**: `little_endian` or `big_endian`; blank means `little_endian`.
+- **Name lists** (`senders`, `receivers`): one comma-separated cell; blank means none. Every name must exist as a node.
+- **`multiplexer_ids`**: the same comma-separated values and inclusive ranges as the CLI `--multiplexer-values` argument — `1,2`, `2-4`, or the mixed `0,2-4,0xA`. A bare integer cell is a single ID; blank means no branch assignment. Export compacts sorted IDs into ranges such as `2-4`.
+- **Multiplexer structure**: `multiplexer_signal` names the parent selector in the same message, and `multiplexer_ids` lists its branch values; set both or neither, exactly as with the CLI. Root selectors have `is_multiplexer` TRUE with blank parent and IDs.
+- **Defaults for blank cells**: `factor` → 1, `offset` → 0, booleans → FALSE, `byte_order` → `little_endian`, name lists → empty, `cycle_time`/`minimum`/`maximum` and optional text → null. Signal bounds must be both present or both blank.
+
+### Semantic round-trip verification
+
+Export and import preserve every supported node, message, signal, choice, and multiplexer relationship. Verify a round trip semantically with `compare`; entity order and DBC formatting may differ from the source even when `result.equal` is true.
+
+```bash
+python3 scripts/dbc_crud.py --json excel export INPUT.dbc OUTPUT.xlsx
+python3 scripts/dbc_crud.py --json excel import OUTPUT.xlsx ROUNDTRIP.dbc
+python3 scripts/dbc_crud.py --json compare INPUT.dbc ROUNDTRIP.dbc
+python3 scripts/dbc_crud.py --json validate ROUNDTRIP.dbc
+```
+
+See [Excel conversion results](dbc-fields.md#excel-conversion-results) for the exact result keys, including `warnings` and the always-null `backup`.
 
 ## Node commands
 

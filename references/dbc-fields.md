@@ -21,7 +21,7 @@ Expected failures emit:
 | Key | Type | Meaning |
 |---|---|---|
 | `success` | boolean | Whether the command completed successfully. |
-| `operation` | string | Top-level command: `init`, `summary`, `validate`, `compare`, `node`, `message`, or `signal`. |
+| `operation` | string | Top-level command: `init`, `summary`, `validate`, `compare`, `excel`, `node`, `message`, or `signal`. |
 | `result` | object | Success payload; shape depends on the operation. |
 | `error` | string | Expected failure message; present instead of `result` on failure. |
 
@@ -151,6 +151,24 @@ Successful entity mutations, and `init`, add these fields to the entity result (
 For an in-place entity mutation with backups enabled, including a path alias that resolves to the source file, `backup` is `PATH.bak` and contains the source bytes from immediately before that save. A later in-place save replaces the previous `.bak`; copy backups elsewhere if multiple recovery points are needed. With `--output` to a distinct path, the input is not modified and `backup` is null; an existing distinct destination is replaced without its own backup. With `--no-backup`, `backup` is also null.
 
 Saving serializes to a temporary file in the destination directory, strictly reloads it, checks all supported entity metadata, preserves an existing destination's permission mode, and then replaces the destination. cantools normalizes DBC text, so formatting and unsupported constructs are not promised to survive. The global `--encoding` controls both loading and saving; during `compare`, the same selected encoding is used for both inputs.
+
+## Excel conversion results
+
+`excel export INPUT.dbc OUTPUT.xlsx` and `excel import INPUT.xlsx OUTPUT.dbc` convert between a DBC database and the five-sheet workbook documented in the [CLI reference](cli-reference.md#excel-conversion). Both share these result keys:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `input` | string | Input path actually read. |
+| `output` | string | Destination path actually written. |
+| `format` | string | Workbook format identifier `dbc-skill-excel`. |
+| `schema_version` | string | Workbook schema version `1`. |
+| `node_count` | integer | Number of nodes converted. |
+| `message_count` | integer | Number of messages converted. |
+| `signal_count` | integer | Number of signals converted. |
+| `warnings` | array of strings | Export always returns `[]`. Import lists the names of workbook sheets other than the five documented sheets; those sheets are ignored. |
+| `backup` | null | `backup` is always `null` for `excel import`: the destination is replaced atomically without creating a `.bak` copy. `excel export` does not return this key. |
+
+Import validates the whole workbook — required `.xlsx` extension, sheet and header structure, metadata `format` and `schema_version`, cell types, formula-free data rows, and every cross-sheet reference — before writing anything, so a failed import never modifies the destination.
 
 ## Comparison result fields
 

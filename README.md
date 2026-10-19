@@ -2,12 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
-A structured command-line skill for creating, inspecting, updating, deleting, validating, and comparing CAN DBC databases. It supports nodes, messages, signals, Classic CAN and CAN FD frame metadata, standard and extended multiplexing, JSON output, and deterministic node/message/signal comparison.
+A structured command-line skill for creating, inspecting, updating, deleting, validating, and comparing CAN DBC databases, and for converting between DBC and Excel workbooks. It supports nodes, messages, signals, Classic CAN and CAN FD frame metadata, standard and extended multiplexing, JSON output, and deterministic node/message/signal comparison.
 
 ## Requirements and setup
 
 - Python 3.9+
-- The pinned dependency in `requirements.txt` (`cantools==40.7.1`)
+- The pinned dependencies in `requirements.txt` (`cantools==40.7.1`, `openpyxl==3.1.5`)
 
 From the repository root:
 
@@ -55,6 +55,20 @@ Message references accept a name or a decimal/`0x` hexadecimal frame ID. Put glo
 - Signal bounds must both be present or both absent. Integer `0|0` is reserved for absent bounds; floating-point zero is representable. See the field reference before clearing or setting bounds.
 - Comparison identifies nodes by name, messages by frame ID plus frame type, and signals by parent message identity plus signal name. Valid equal or different inputs return exit code 0.
 
+## Excel conversion
+
+```bash
+python3 scripts/dbc_crud.py --json excel export INPUT.dbc OUTPUT.xlsx
+python3 scripts/dbc_crud.py --json excel import INPUT.xlsx OUTPUT.dbc
+```
+
+- Export writes a five-sheet workbook (`Metadata`, `Nodes`, `Messages`, `Signals`, `Choices`) with dropdown validation for boolean and byte-order columns; an existing destination is replaced atomically without a backup.
+- Import accepts only `.xlsx` files and rejects formula cells — paste computed cells as values before importing. The whole workbook is validated before anything is written, so a failed import never touches `OUTPUT.dbc`; a successful import replaces it atomically and `backup` is always `null`.
+- Sheets beyond the five documented ones are ignored and listed in `result.warnings`.
+- Verify a round trip semantically: export, import to a new DBC, then `compare` the two files and check `result.equal`.
+
+The full workbook schema, column list, and cell syntax are in the [CLI reference](references/cli-reference.md#excel-conversion); result keys are in the [field reference](references/dbc-fields.md#excel-conversion-results).
+
 ## Documentation
 
 - [Agent Skill](SKILL.md)
@@ -63,7 +77,7 @@ Message references accept a name or a decimal/`0x` hexadecimal frame ID. Put glo
 - [Complete English workflow](examples/workflow.md)
 - [完整中文工作流](examples/workflow.zh-CN.md)
 
-The workflows use a temporary copy and write every mutation to a new `--output` file. They demonstrate CRUD, scale editing, standard and extended multiplexing, safe deletion, comparison, final inspection, and validation.
+The workflows use a temporary copy and write every mutation to a new `--output` file. They demonstrate CRUD, scale editing, standard and extended multiplexing, safe deletion, comparison, a semantic Excel round trip, final inspection, and validation.
 
 ## Tests
 

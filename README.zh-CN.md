@@ -2,12 +2,12 @@
 
 [English](README.md)
 
-本项目提供结构化命令行 Skill，用于创建、查看、更新、删除、验证和比较 CAN DBC 数据库。支持节点、报文、信号、Classic CAN 与 CAN FD 帧元数据、标准及扩展多路复用、JSON 输出，以及确定性的节点/报文/信号比较。
+本项目提供结构化命令行 Skill，用于创建、查看、更新、删除、验证和比较 CAN DBC 数据库，以及在 DBC 与 Excel 工作簿之间转换。支持节点、报文、信号、Classic CAN 与 CAN FD 帧元数据、标准及扩展多路复用、JSON 输出，以及确定性的节点/报文/信号比较。
 
 ## 环境要求与安装
 
 - Python 3.9+
-- `requirements.txt` 中固定的依赖（`cantools==40.7.1`）
+- `requirements.txt` 中固定的依赖（`cantools==40.7.1`、`openpyxl==3.1.5`）
 
 在仓库根目录执行：
 
@@ -55,6 +55,20 @@ python3 scripts/dbc_crud.py --json validate demo.dbc
 - 信号最小值和最大值必须同时存在或同时缺省。整数 `0|0` 被保留为“无边界”；浮点零可以表示。清除或设置边界前请阅读字段参考。
 - 比较时，节点按名称识别，报文按帧 ID 加帧类型识别，信号按父报文身份加信号名识别。有效输入无论相等或不同都返回退出码 0。
 
+## Excel 转换
+
+```bash
+python3 scripts/dbc_crud.py --json excel export INPUT.dbc OUTPUT.xlsx
+python3 scripts/dbc_crud.py --json excel import INPUT.xlsx OUTPUT.dbc
+```
+
+- 导出会生成五个工作表（`Metadata`、`Nodes`、`Messages`、`Signals`、`Choices`），布尔列和字节序列列带下拉校验；已有目标文件会被原子替换，不创建备份。
+- 导入只接受 `.xlsx` 文件，并拒绝包含公式的单元格——导入前请先把计算结果粘贴为数值。整个工作簿先完成校验才会写入，导入失败不会改动 `OUTPUT.dbc`；成功导入会原子替换目标文件，且 `backup` 始终为 `null`。
+- 五个文档化工作表以外的额外工作表会被忽略，并列在 `result.warnings` 中。
+- 用语义方式验证往返：导出、导入到新 DBC，然后 `compare` 两个文件并检查 `result.equal`。
+
+完整的工作簿结构、列清单和单元格语法见 [CLI 参考](references/cli-reference.md#excel-conversion)；结果字段见[字段参考](references/dbc-fields.md#excel-conversion-results)。
+
 ## 文档
 
 - [Agent Skill](SKILL.md)
@@ -63,7 +77,7 @@ python3 scripts/dbc_crud.py --json validate demo.dbc
 - [Complete English workflow](examples/workflow.md)
 - [完整中文工作流](examples/workflow.zh-CN.md)
 
-两个工作流都使用临时副本，并通过 `--output` 将每次修改写入新文件，覆盖 CRUD、比例修改、标准和扩展多路复用、安全删除、比较、最终检查与验证。
+两个工作流都使用临时副本，并通过 `--output` 将每次修改写入新文件，覆盖 CRUD、比例修改、标准和扩展多路复用、安全删除、比较、Excel 语义往返、最终检查与验证。
 
 ## 测试
 
