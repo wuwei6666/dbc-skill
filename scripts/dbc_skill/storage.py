@@ -37,46 +37,7 @@ def _multiplexer_metadata(db: Database) -> dict:
 
 
 def _supported_metadata(db: Database) -> dict:
-    messages = []
-    signals = []
-    for message in db.messages:
-        details = DBCService._message_to_dict(message)
-        details["signals"] = sorted(
-            details["signals"],
-            key=lambda signal: (signal["start"], signal["name"], signal["length"]),
-        )
-        messages.append(details)
-        signals.extend(
-            {
-                "message_frame_id": message.frame_id,
-                "message_is_extended_frame": message.is_extended_frame,
-                **DBCService._signal_to_dict(signal),
-            }
-            for signal in message.signals
-        )
-
-    messages.sort(
-        key=lambda message: (
-            message["frame_id"],
-            message["is_extended_frame"],
-            message["name"],
-        )
-    )
-    signals.sort(
-        key=lambda signal: (
-            signal["message_frame_id"],
-            signal["message_is_extended_frame"],
-            signal["name"],
-        )
-    )
-    return {
-        "nodes": sorted(
-            (DBCService._node_to_dict(node) for node in db.nodes),
-            key=lambda node: node["name"],
-        ),
-        "messages": messages,
-        "signals": signals,
-    }
+    return DBCService(db).entity_snapshot()
 
 
 def _same_file(source: Path, destination: Path) -> bool:

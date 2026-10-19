@@ -133,6 +133,48 @@ class DBCService:
             "signal_count": sum(len(message.signals) for message in self.db.messages),
         }
 
+    def entity_snapshot(self) -> dict:
+        messages = []
+        signals = []
+        for message in self.db.messages:
+            details = self._message_to_dict(message)
+            details["signals"] = sorted(
+                details["signals"],
+                key=lambda signal: (signal["start"], signal["name"], signal["length"]),
+            )
+            messages.append(details)
+            signals.extend(
+                {
+                    "message_frame_id": message.frame_id,
+                    "message_is_extended_frame": message.is_extended_frame,
+                    **self._signal_to_dict(signal),
+                }
+                for signal in message.signals
+            )
+
+        messages.sort(
+            key=lambda message: (
+                message["frame_id"],
+                message["is_extended_frame"],
+                message["name"],
+            )
+        )
+        signals.sort(
+            key=lambda signal: (
+                signal["message_frame_id"],
+                signal["message_is_extended_frame"],
+                signal["name"],
+            )
+        )
+        return {
+            "nodes": sorted(
+                (self._node_to_dict(node) for node in self.db.nodes),
+                key=lambda node: node["name"],
+            ),
+            "messages": messages,
+            "signals": signals,
+        }
+
     def validate(self) -> dict:
         validate_multiplexer_metadata(self.db)
         try:
