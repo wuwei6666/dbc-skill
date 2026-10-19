@@ -6,6 +6,7 @@ from pathlib import Path
 import cantools
 from cantools.database.can import Database
 
+from .compare import compare_databases
 from .errors import DBCError
 from .formatting import emit_error, emit_result
 from .service import DBCService, parse_frame_id
@@ -101,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", help="Parse and validate a DBC database."
     )
     validate_parser.add_argument("path", type=Path)
+
+    compare_parser = subparsers.add_parser(
+        "compare", help="Compare two DBC databases without modifying them."
+    )
+    compare_parser.add_argument("left", type=Path)
+    compare_parser.add_argument("right", type=Path)
 
     node_parser = subparsers.add_parser("node", help="Manage DBC nodes.")
     node_subparsers = node_parser.add_subparsers(dest="node_command", required=True)
@@ -252,6 +259,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise DBCError(
                     f"Unable to validate DBC '{args.path}': {exc}"
                 ) from exc
+        elif args.command == "compare":
+            left = load_database(args.left, args.encoding)
+            right = load_database(args.right, args.encoding)
+            result = compare_databases(left, right)
         elif args.command == "node":
             service = DBCService(load_database(args.path, args.encoding))
             if args.node_command == "list":

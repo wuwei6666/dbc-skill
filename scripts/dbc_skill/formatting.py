@@ -12,6 +12,16 @@ def _format_value(value):
     return str(value)
 
 
+def _emit_comparison(result):
+    print(f"Equal: {_format_value(result['equal'])}")
+    print(f"Counts: {_format_value(result['counts'])}")
+    for entity_type in ("nodes", "messages", "signals"):
+        print(f"{entity_type.capitalize()}:")
+        for status in ("added", "removed", "modified", "unchanged"):
+            label = status.capitalize()
+            print(f"  {label}: {_format_value(result[entity_type][status])}")
+
+
 def emit_result(operation, result, json_output):
     if json_output:
         print(
@@ -23,6 +33,9 @@ def emit_result(operation, result, json_output):
         )
         return
 
+    if operation == "compare":
+        _emit_comparison(result)
+        return
     if not result:
         print(f"{operation} succeeded.")
         return
