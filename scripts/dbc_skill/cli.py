@@ -8,6 +8,12 @@ from cantools.database.can import Database
 
 from .compare import compare_databases
 from .errors import DBCError
+from .excel import (
+    FORMAT_NAME,
+    SCHEMA_VERSION,
+    database_from_workbook,
+    export_database,
+)
 from .formatting import emit_error, emit_result
 from .service import DBCService, parse_frame_id
 from .storage import load_database, save_database
@@ -108,6 +114,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_parser.add_argument("left", type=Path)
     compare_parser.add_argument("right", type=Path)
+
+    excel_parser = subparsers.add_parser(
+        "excel", help="Convert between DBC databases and Excel workbooks."
+    )
+    excel_subparsers = excel_parser.add_subparsers(
+        dest="excel_command", required=True
+    )
+
+    excel_export_parser = excel_subparsers.add_parser(
+        "export", help="Export a DBC database to an Excel workbook."
+    )
+    excel_export_parser.add_argument("input", type=Path)
+    excel_export_parser.add_argument("output", type=Path)
+
+    excel_import_parser = excel_subparsers.add_parser(
+        "import", help="Import an Excel workbook into a DBC database."
+    )
+    excel_import_parser.add_argument("input", type=Path)
+    excel_import_parser.add_argument("output", type=Path)
 
     node_parser = subparsers.add_parser("node", help="Manage DBC nodes.")
     node_subparsers = node_parser.add_subparsers(dest="node_command", required=True)
@@ -265,6 +290,34 @@ def main(argv: list[str] | None = None) -> int:
             left = load_database(args.left, args.encoding)
             right = load_database(args.right, args.encoding)
             result = compare_databases(left, right)
+        elif args.command == "excel":
+            if args.excel_command == "export":
+                db = load_database(args.input, args.encoding)
+                result = {"input": str(args.input)}
+                result.update(export_database(db, args.output))
+            elif args.excel_command == "import":
+                db, warnings = database_from_workbook(args.input)
+                snapshot = DBCService(db).entity_snapshot()
+                result = {
+                    "input": str(args.input),
+                    "format": FORMAT_NAME,
+                    "schema_version": SCHEMA_VERSION,
+                    "node_count": len(snapshot["nodes"]),
+                    "message_count": len(snapshot["messages"]),
+                    "signal_count": len(snapshot["signals"]),
+                    "warnings": warnings,
+                }
+                result.update(
+                    save_database(
+                        db,
+                        args.input,
+                        args.output,
+                        args.encoding,
+                        backup=False,
+                    )
+                )
+            else:
+                raise DBCError(f"Unknown excel command: {args.excel_command}")
         elif args.command == "node":
             service = DBCService(load_database(args.path, args.encoding))
             if args.node_command == "list":

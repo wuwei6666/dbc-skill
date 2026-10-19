@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import tempfile
@@ -15,6 +16,9 @@ from scripts.dbc_skill.compare import compare_databases
 from scripts.dbc_skill.errors import DBCError
 from scripts.dbc_skill.service import DBCService
 from scripts.dbc_skill.storage import _supported_metadata, load_database
+from tests.helpers import run_cli
+
+EXAMPLE_DBC = Path(__file__).resolve().parent.parent / "examples" / "example.dbc"
 
 
 def make_service():
@@ -596,6 +600,159 @@ class ImportDatabaseTests(unittest.TestCase):
                 with self.assertRaises(DBCError):
                     excel.export_database(make_service().db, output)
             self.assertFalse(output.exists())
+
+
+class ExcelCliTests(unittest.TestCase):
+    RESULT_KEYS = {
+        "input",
+        "output",
+        "format",
+        "schema_version",
+        "node_count",
+        "message_count",
+        "signal_count",
+        "warnings",
+    }
+
+    def export_example(self, directory):
+        workbook_path = Path(directory) / "example.xlsx"
+        code, out, err = run_cli(
+            ["--json", "excel", "export", str(EXAMPLE_DBC), str(workbook_path)]
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Traceback", out + err)
+        return workbook_path, json.loads(out)["result"]
+
+    def test_cli_round_trip_example_dbc_compares_equal(self):
+        snapshot = DBCService(load_database(EXAMPLE_DBC, "utf-8")).entity_snapshot()
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path, export_result = self.export_example(directory)
+            self.assertEqual(
+                export_result,
+                {
+                    "input": str(EXAMPLE_DBC),
+                    "output": str(workbook_path),
+                    "format": "dbc-skill-excel",
+                    "schema_version": "1",
+                    "node_count": len(snapshot["nodes"]),
+                    "message_count": len(snapshot["messages"]),
+                    "signal_count": len(snapshot["signals"]),
+                    "warnings": [],
+                },
+            )
+            self.assertTrue(workbook_path.is_file())
+
+            roundtrip_path = Path(directory) / "roundtrip.dbc"
+            code, out, err = run_cli(
+                ["--json", "excel", "import", str(workbook_path), str(roundtrip_path)]
+            )
+            self.assertEqual(code, 0, out + err)
+            self.assertNotIn("Traceback", out + err)
+            import_result = json.loads(out)["result"]
+            self.assertTrue(self.RESULT_KEYS <= set(import_result))
+            self.assertEqual(import_result["input"], str(workbook_path))
+            self.assertEqual(import_result["output"], str(roundtrip_path))
+            self.assertEqual(import_result["format"], "dbc-skill-excel")
+            self.assertEqual(import_result["schema_version"], "1")
+            self.assertEqual(import_result["node_count"], len(snapshot["nodes"]))
+            self.assertEqual(import_result["message_count"], len(snapshot["messages"]))
+            self.assertEqual(import_result["signal_count"], len(snapshot["signals"]))
+            self.assertEqual(import_result["warnings"], [])
+
+            code, out, err = run_cli(
+                ["--json", "compare", str(EXAMPLE_DBC), str(roundtrip_path)]
+            )
+            self.assertEqual(code, 0, out + err)
+            self.assertNotIn("Traceback", out + err)
+            self.assertIs(json.loads(out)["result"]["equal"], True)
+
+    def test_cli_text_output_reports_counts_and_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = Path(directory) / "example.xlsx"
+            code, out, err = run_cli(
+                ["excel", "export", str(EXAMPLE_DBC), str(workbook_path)]
+            )
+            self.assertEqual(code, 0, out + err)
+            self.assertIn(str(EXAMPLE_DBC), out)
+            self.assertIn(str(workbook_path), out)
+            self.assertIn("Format: dbc-skill-excel", out)
+            self.assertIn("Schema version: 1", out)
+            self.assertIn("Message count: 1", out)
+            self.assertIn("Signal count: 4", out)
+            self.assertNotIn("Traceback", out + err)
+
+            roundtrip_path = Path(directory) / "roundtrip.dbc"
+            code, out, err = run_cli(
+                ["excel", "import", str(workbook_path), str(roundtrip_path)]
+            )
+            self.assertEqual(code, 0, out + err)
+            self.assertIn(str(workbook_path), out)
+            self.assertIn(str(roundtrip_path), out)
+            self.assertIn("Format: dbc-skill-excel", out)
+            self.assertIn("Signal count: 4", out)
+            self.assertNotIn("Traceback", out + err)
+
+    def test_cli_import_surfaces_extra_sheet_warnings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = write_import_workbook(
+                Path(directory) / "import.xlsx", extra_sheets=("Scratch", "Notes")
+            )
+            output_path = Path(directory) / "imported.dbc"
+            code, out, err = run_cli(
+                ["--json", "excel", "import", str(workbook_path), str(output_path)]
+            )
+            self.assertEqual(code, 0, out + err)
+            result = json.loads(out)["result"]
+            self.assertTrue(self.RESULT_KEYS <= set(result))
+            self.assertEqual(result["warnings"], ["Scratch", "Notes"])
+            self.assertEqual(result["message_count"], 2)
+            self.assertTrue(output_path.is_file())
+
+    def test_cli_import_rejects_xls_extension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = write_import_workbook(Path(directory) / "import.xls")
+            output_path = Path(directory) / "imported.dbc"
+            code, out, err = run_cli(
+                ["--json", "excel", "import", str(workbook_path), str(output_path)]
+            )
+            self.assertEqual(code, 1)
+            payload = json.loads(out)
+            self.assertFalse(payload["success"])
+            self.assertIn(".xlsx", payload["error"])
+            self.assertNotIn("Traceback", out + err)
+            self.assertFalse(output_path.exists())
+
+    def test_cli_import_malformed_workbook_preserves_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = Path(directory) / "junk.xlsx"
+            workbook_path.write_bytes(b"this is not a zip archive")
+            output_path = Path(directory) / "existing.dbc"
+            original = b"original destination bytes"
+            output_path.write_bytes(original)
+            code, out, err = run_cli(
+                ["--json", "excel", "import", str(workbook_path), str(output_path)]
+            )
+            self.assertEqual(code, 1)
+            payload = json.loads(out)
+            self.assertFalse(payload["success"])
+            self.assertIn("Unable to read", payload["error"])
+            self.assertNotIn("Traceback", out + err)
+            self.assertEqual(output_path.read_bytes(), original)
+
+    def test_cli_export_failure_preserves_existing_workbook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dbc = Path(directory) / "missing.dbc"
+            workbook_path = Path(directory) / "existing.xlsx"
+            original = b"original workbook bytes"
+            workbook_path.write_bytes(original)
+            code, out, err = run_cli(
+                ["--json", "excel", "export", str(missing_dbc), str(workbook_path)]
+            )
+            self.assertEqual(code, 1)
+            payload = json.loads(out)
+            self.assertFalse(payload["success"])
+            self.assertNotIn("Traceback", out + err)
+            self.assertEqual(workbook_path.read_bytes(), original)
 
 
 class RoundTripTests(unittest.TestCase):
