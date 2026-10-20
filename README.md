@@ -23,7 +23,7 @@ Keep the repository layout intact when installing the skill: `SKILL.md`, `refere
 
 Python 3.9+ is required because the pinned `cantools==40.7.1` dependency requires it (`openpyxl==3.1.5` requires Python 3.8+). Lowering this requirement would require changing and revalidating the DBC engine. Node.js 22+ is required for the npm wrapper.
 
-After the package is published to npm:
+Published package: [dsh-plugin-dbc](https://www.npmjs.com/package/dsh-plugin-dbc).
 
 ```bash
 # One-time setup: create an isolated Python environment and install dependencies.

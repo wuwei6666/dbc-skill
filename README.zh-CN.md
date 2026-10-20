@@ -23,7 +23,7 @@ source .venv/bin/activate
 
 最低 Python 3.9 来自固定依赖 `cantools==40.7.1` 的要求；`openpyxl==3.1.5` 最低要求 Python 3.8。降低版本需要更换并重新验证 DBC 引擎，因此保留 Python 3.9+。npm 包装器要求 Node.js 22+。
 
-包发布到 npm 后可执行：
+npm 包已发布：[dsh-plugin-dbc](https://www.npmjs.com/package/dsh-plugin-dbc)。使用方式：
 
 ```bash
 # 首次使用：创建隔离的 Python 环境并安装依赖。
