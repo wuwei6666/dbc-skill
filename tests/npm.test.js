@@ -36,3 +36,15 @@ test('CLI wrapper round trips DBC through Excel from an unrelated directory', as
     assert.match(cli.stdout, /excel/);
   } finally { await rm(directory, {recursive:true, force:true}); }
 });
+
+test('published archive excludes Python caches and development files', async () => {
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const packed = await run(npm, ['pack','--dry-run','--ignore-scripts','--json'], {cwd:root});
+  assert.equal(packed.code, 0, packed.stderr);
+  const files = JSON.parse(packed.stdout)[0].files.map(file => file.path);
+  assert.ok(files.includes('scripts/dbc_crud.py'));
+  assert.ok(files.includes('scripts/dbc_skill/excel.py'));
+  assert.ok(files.includes('npm/index.js'));
+  assert.ok(files.includes('cordis.patch.yml'));
+  assert.equal(files.some(file => /__pycache__|\.pyc$|node_modules|^tests\//.test(file)), false, files.join('\n'));
+});

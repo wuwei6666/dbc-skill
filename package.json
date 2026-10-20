@@ -6,13 +6,13 @@
   "main": "./npm/index.js",
   "exports": "./npm/index.js",
   "bin": {
-    "dbc-skill": "./bin/dbc-skill.js"
+    "dbc-skill": "bin/dbc-skill.js"
   },
   "files": [
     "bin/",
     "npm/",
     "cordis.patch.yml",
-    "scripts/",
+    "scripts/**/*.py",
     "requirements.txt",
     "SKILL.md",
     "references/",
