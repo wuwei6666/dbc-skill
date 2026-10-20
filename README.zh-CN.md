@@ -19,6 +19,41 @@ source .venv/bin/activate
 
 安装 Skill 时请保留仓库目录结构：`SKILL.md`、`references/`、`examples/` 和 `scripts/` 之间使用相对路径。所有命令均从仓库根目录执行。
 
+## npm 命令与 DeepSeek Harness 插件
+
+最低 Python 3.9 来自固定依赖 `cantools==40.7.1` 的要求；`openpyxl==3.1.5` 最低要求 Python 3.8。降低版本需要更换并重新验证 DBC 引擎，因此保留 Python 3.9+。npm 包装器要求 Node.js 22+。
+
+包发布到 npm 后可执行：
+
+```bash
+# 首次使用：创建隔离的 Python 环境并安装依赖。
+npx --yes dsh-plugin-dbc setup
+# 在任意目录运行，相对文件路径以当前工作目录为准。
+npx --yes dsh-plugin-dbc --json summary ./example.dbc
+npx --yes dsh-plugin-dbc --json excel export ./example.dbc ./example.xlsx
+npx --yes dsh-plugin-dbc --json excel import ./example.xlsx ./roundtrip.dbc
+npx --yes dsh-plugin-dbc --json compare ./example.dbc ./roundtrip.dbc
+
+# 安装原生 Harness 插件（验证 CLI 版本：0.2.1-rc.2）。
+npx --yes @deepseek-ai/dsh web --help
+npx --yes @deepseek-ai/dsh plugin --profile web add dsh-plugin-dbc
+npx --yes @deepseek-ai/dsh web
+```
+
+插件注册 `dbc` 工具，接收独立参数数组，返回 JSON 结果。Python 在宿主机运行，每次调用需要通过 Harness 的用户审批；没有审批支持的界面会拒绝调用。Agent 工具调用应使用绝对路径。包不包含模型或 API Key，也不把 DBC 上传到外部转换服务；Agent 配置的模型仍会收到工具参数与结果。
+
+`setup` 默认使用 `~/.dbc-skill/venv-v1`，可通过 `DBC_SKILL_VENV` 指定环境目录。安装 npm 包不会自动安装 Python 依赖，只有主动运行 `setup` 才会安装。已有环境可通过 `DBC_SKILL_PYTHON` 指定 Python 可执行文件，并安装两项固定版本依赖。系统需预装 Python，npx 不会安装 Python 本身。
+
+发布前本地验证：
+
+```bash
+npm ci
+node bin/dbc-skill.js setup
+npm test
+npm pack
+npx --yes @deepseek-ai/dsh plugin --profile web add ./dsh-plugin-dbc-0.1.0.tgz
+```
+
 ## 快速开始
 
 ```bash

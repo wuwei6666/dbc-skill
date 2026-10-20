@@ -19,6 +19,42 @@ source .venv/bin/activate
 
 Keep the repository layout intact when installing the skill: `SKILL.md`, `references/`, `examples/`, and `scripts/` use relative paths. Run commands from the repository root.
 
+## npm CLI and DeepSeek Harness plugin
+
+Python 3.9+ is required because the pinned `cantools==40.7.1` dependency requires it (`openpyxl==3.1.5` requires Python 3.8+). Lowering this requirement would require changing and revalidating the DBC engine. Node.js 22+ is required for the npm wrapper.
+
+After the package is published to npm:
+
+```bash
+# One-time setup: create an isolated Python environment and install dependencies.
+npx --yes dsh-plugin-dbc setup
+# Use from any directory; file paths remain relative to your working directory.
+npx --yes dsh-plugin-dbc --json summary ./example.dbc
+npx --yes dsh-plugin-dbc --json excel export ./example.dbc ./example.xlsx
+npx --yes dsh-plugin-dbc --json excel import ./example.xlsx ./roundtrip.dbc
+npx --yes dsh-plugin-dbc --json compare ./example.dbc ./roundtrip.dbc
+
+# Install the native plugin into your Harness profile (tested CLI: 0.2.1-rc.2).
+npx --yes @deepseek-ai/dsh web --help
+npx --yes @deepseek-ai/dsh plugin --profile web add dsh-plugin-dbc
+npx --yes @deepseek-ai/dsh web
+```
+
+The bundle registers the `dbc` tool with structured argument tokens and JSON results. The plugin runs Python on the host, so every invocation goes through Harness user approval; a surface without approval support denies the call. Use absolute paths in agent tool calls. The package does not contain an LLM or API key and does not send DBC files to an external conversion service. The agent's configured model still receives tool arguments and results.
+
+`setup` stores its environment in `~/.dbc-skill/venv-v1` (override with `DBC_SKILL_VENV`). It runs only when explicitly requested, never as an npm install hook. To use an existing Python environment instead, set `DBC_SKILL_PYTHON` to its executable; both pinned dependencies must be installed. Python must already be installed; npx installs the JavaScript package, not Python.
+
+For local development before publication:
+
+```bash
+npm ci
+node bin/dbc-skill.js setup
+npm test
+npm pack
+# Install the resulting tarball into Harness, without publishing.
+npx --yes @deepseek-ai/dsh plugin --profile web add ./dsh-plugin-dbc-0.1.0.tgz
+```
+
 ## Quick start
 
 ```bash

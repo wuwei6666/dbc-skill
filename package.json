@@ -1,0 +1,61 @@
+{
+  "name": "dsh-plugin-dbc",
+  "version": "0.1.0",
+  "description": "CAN DBC editing, validation, comparison and Excel conversion for DeepSeek Harness",
+  "type": "module",
+  "main": "./npm/index.js",
+  "exports": "./npm/index.js",
+  "bin": {
+    "dbc-skill": "./bin/dbc-skill.js"
+  },
+  "files": [
+    "bin/",
+    "npm/",
+    "cordis.patch.yml",
+    "scripts/",
+    "requirements.txt",
+    "SKILL.md",
+    "references/",
+    "examples/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test tests/npm.test.js",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dbc",
+    "can-bus",
+    "can-fd",
+    "excel",
+    "agent-skills"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wuwei6666/dbc-skill.git"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}
